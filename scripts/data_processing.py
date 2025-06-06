@@ -6,7 +6,6 @@ import torch
 from torchvision import transforms
 from sklearn.model_selection import train_test_split
 
-
 BASE_DIR = Path(__file__).parent.parent.resolve()
 
 RAW_DATA_DIR = BASE_DIR / "data" / "raw"
@@ -20,8 +19,7 @@ TRAIN_RATIO = 0.75
 VAL_RATIO = 0.10
 TEST_RATIO = 0.15
 
-### data transformations ###
-
+# transformations for training images
 train_transform = transforms.Compose([
     transforms.ToPILImage(),
     transforms.Resize((384, 384)),
@@ -32,6 +30,7 @@ train_transform = transforms.Compose([
                          std=[0.229, 0.224, 0.225])
 ])
 
+# transformations for validation and test images
 val_test_transform = transforms.Compose([
     transforms.ToPILImage(),
     transforms.Resize((384, 384)),
@@ -41,7 +40,7 @@ val_test_transform = transforms.Compose([
                          std=[0.229, 0.224, 0.225])
 ])
 
-
+# determine class name based on folder name
 def get_class_from_foldername(filepath: Path) -> str:
     foldername = filepath.parent.name.lower()
     if 'glioma' in foldername:
@@ -53,7 +52,7 @@ def get_class_from_foldername(filepath: Path) -> str:
     else:
         raise ValueError(f"unknown class for folder: {foldername}")
 
-
+# collect image file paths grouped by class
 def collect_files_by_class(raw_data_dir: Path) -> dict:
     class_files = {cls: [] for cls in CLASSES}
     valid_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff'}
@@ -67,7 +66,7 @@ def collect_files_by_class(raw_data_dir: Path) -> dict:
                 print(f"skipping file {filepath.name}: {e}")
     return class_files
 
-
+# split each class's files into train, validation, and test lists
 def split_data(class_files: dict):
     train_files, val_files, test_files = [], [], []
 
@@ -83,28 +82,22 @@ def split_data(class_files: dict):
 
     return train_files, val_files, test_files
 
-
+# apply transforms and save tensors to destination directory
 def process_and_save(file_class_list, dest_dir: Path, transform):
     for fpath, class_name in file_class_list:
         try:
             img = Image.open(fpath).convert('RGB')
-            img_np = np.array(img)  
-
+            img_np = np.array(img)
             tensor = transform(img_np)
-
             class_dir = dest_dir / class_name
-            class_dir.mkdir(parents=True, exist_ok=True)  
-
+            class_dir.mkdir(parents=True, exist_ok=True)
             save_name = f"{fpath.stem}.pt"
             save_path = class_dir / save_name
-
             torch.save(tensor, save_path)
-
-
         except Exception as e:
             print(f"failed to process {fpath}: {e}")
 
-
+# main entry point for preprocessing
 def main():
     print(f"collecting files from {RAW_DATA_DIR}...")
     class_files = collect_files_by_class(RAW_DATA_DIR)
@@ -134,7 +127,6 @@ def main():
     print(f"training images saved to: {PROCESSED_TRAIN_DIR}")
     print(f"validation images saved to: {PROCESSED_VAL_DIR}")
     print(f"test images saved to: {PROCESSED_TEST_DIR}")
-
 
 if __name__ == "__main__":
     main()
