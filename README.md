@@ -1,7 +1,5 @@
 # Brain Tumor Classification - Deep Learning Model
 
-![Brain Tumor Classification](https://via.placeholder.com/800x400?text=Brain+Tumor+Classification) 
-
 This project presents a deep learning-based model for the early detection of brain tumors using magnetic resonance imaging (MRI) data. The model leverages transfer learning with the EfficientNetV2-S architecture to classify MRI images into one of three tumor types.
 
 ## Project Overview
