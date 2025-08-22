@@ -13,18 +13,6 @@ This project uses data aggregated from the following publicly available datasets
 ## 3. PMRAM: Bangladeshi Brain Cancer - MRI Dataset
 - **Link**: https://www.kaggle.com/datasets/orvile/pmram-bangladeshi-brain-cancer-mri-dataset
 - **Tumor Types**: Glioma, Meningioma, Pituitary
-  
-## 4. XXXXXXXX
-- **Link**: 
-- **Images**
-- **Tumor Types**: Glioma, Meningioma, Pituitary
-  
-## 5. XXXXXXXX
-- **Link**
-- **Images**
-- **Tumor Types**: Glioma, Meningioma, Pituitary
-- **Notes**: Used for final testing
-
 
 
 
