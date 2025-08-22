@@ -4,14 +4,6 @@
 
 This project presents a deep learning-based model for the early detection of brain tumors using magnetic resonance imaging (MRI) data. The model leverages transfer learning with the EfficientNetV2-S architecture to classify MRI images into one of three tumor types.
 
-## Table of Contents
-- [Project Overview](#project-overview)
-- [Key Features](#key-features)
-- [Applications](#applications)
-- [Technologies Used](#technologies-used)
-- [Performance Metrics](#performance-metrics)
-- [Acknowledgements](#acknowledgements)
-
 ## Project Overview
 
 This project aims to assist medical professionals in the early and accurate diagnosis of brain tumors using artificial intelligence. By applying deep convolutional neural networks to MRI scans, the model can detect and classify three common types of brain tumors:
