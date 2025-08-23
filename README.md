@@ -8,7 +8,7 @@ This project uses a deep learning model based on EfficientNetV2-S transfer learn
 ![Repo Size](https://img.shields.io/github/repo-size/daviddning/cancer-tumor-classifier?style=for-the-badge)
 
 
-<img width="860" height="507" alt="image" src="https://github.com/user-attachments/assets/42fabe00-3c9c-4929-ad89-b4f51c204c86" />
+<img width="800" height="425" alt="image" src="https://github.com/user-attachments/assets/42fabe00-3c9c-4929-ad89-b4f51c204c86" />
 
 ## Project Overview
 
