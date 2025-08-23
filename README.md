@@ -56,7 +56,13 @@ This project aims to assist medical professionals in the early and accurate diag
 ### Sample Predictions
 <img src="https://github.com/user-attachments/assets/0e67d670-60fc-498c-b971-5d59619fb9f8" width="700"/>
 
-## Acknowledgements
+## Future Work
 
-- Datasets sourced from various public repositories on Kaggle
-- Inspired by recent research in AI-assisted medical imaging
+- **Grad-CAM for Explainability**:  
+  Add Gradient-weighted Class Activation Mapping (Grad-CAM) to highlight the regions of MRI scans that most influence the model’s predictions. This will make the model’s decisions more transparent and easier to interpret.  
+
+- **Model Deployment**:  
+  Develop a simple web app or API to allow users to test the model in real-world settings.  
+
+- **Extended Evaluation**:  
+  Evaluate the model on additional independent MRI datasets to test its performance across different imaging conditions.  
