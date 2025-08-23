@@ -1,4 +1,4 @@
-# Brain Tumor Classification - Deep Learning Model
+<img width="860" height="507" alt="image" src="https://github.com/user-attachments/assets/a8528f21-56dc-422b-9722-af143d0b1b98" /># Brain Tumor Classification - Deep Learning Model
 
 This project uses a deep learning model based on EfficientNetV2-S transfer learning to classify MRI scans for early detection of three brain tumor types.
 
@@ -7,6 +7,9 @@ This project uses a deep learning model based on EfficientNetV2-S transfer learn
 [![Jupyter](https://img.shields.io/badge/Jupyter-F37626?style=for-the-badge&logo=jupyter&logoColor=white)](https://jupyter.org/)
 ![Repo Size](https://img.shields.io/github/repo-size/daviddning/cancer-tumor-classifier?style=for-the-badge)
 
+
+<img width="860" height="507" alt="image" src="https://github.com/user-attachments/assets/42fabe00-3c9c-4929-ad89-b4f51c204c86" />
+
 ## Project Overview
 
 This project aims to assist medical professionals in the early and accurate diagnosis of brain tumors using artificial intelligence. By applying deep convolutional neural networks to MRI scans, the model can detect and classify three common types of brain tumors:
@@ -14,8 +17,6 @@ This project aims to assist medical professionals in the early and accurate diag
 - Glioma
 - Meningioma
 - Pituitary
-
-Using transfer learning with EfficientNetV2-S, a state-of-the-art CNN architecture, the model was trained on a large and diverse dataset compiled from multiple Kaggle sources, ensuring strong generalization capabilities.
 
 ## Key Features
 
