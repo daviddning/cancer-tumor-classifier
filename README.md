@@ -31,7 +31,9 @@ This project aims to assist medical professionals in the early and accurate diag
 - **Jupyter**: Exploratory data analysis 
 - **Kaggle Datasets**: Multiple publicly available brain tumor MRI datasets 
 
-## Performance Metrics
+## Results
+
+<img width="1754" height="1532" alt="image" src="https://github.com/user-attachments/assets/fcfc0d77-d425-4295-a17b-1bc30ccac05b" />
 
 | Metric        | Value   |
 |--------------|---------|
@@ -39,6 +41,15 @@ This project aims to assist medical professionals in the early and accurate diag
 | Precision    | 99.45%  |
 | Recall       | 99.45%  |
 | F1-Score     | 99.45%  |
+
+Training curve:
+<img width="3600" height="1500" alt="image" src="https://github.com/user-attachments/assets/183617e4-d978-4384-9a6e-9658d3bf97ef" />
+
+Sample predictions from the model:
+<img width="4500" height="1500" alt="image" src="https://github.com/user-attachments/assets/0e67d670-60fc-498c-b971-5d59619fb9f8" />
+
+
+
 
 ## Acknowledgements
 
