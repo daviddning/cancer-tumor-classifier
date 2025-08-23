@@ -33,23 +33,28 @@ This project aims to assist medical professionals in the early and accurate diag
 
 ## Results
 
-<img width="1754" height="1532" alt="image" src="https://github.com/user-attachments/assets/fcfc0d77-d425-4295-a17b-1bc30ccac05b" />
+### Performance Metrics
+| Metric      | Value   |
+|-------------|---------|
+| Accuracy    | 99.45%  |
+| Precision   | 99.45%  |
+| Recall      | 99.45%  |
+| F1-Score    | 99.45%  |
 
-| Metric        | Value   |
-|--------------|---------|
-| Accuracy     | 99.45%  |
-| Precision    | 99.45%  |
-| Recall       | 99.45%  |
-| F1-Score     | 99.45%  |
+---
 
-Training curve:
-<img width="3600" height="1500" alt="image" src="https://github.com/user-attachments/assets/183617e4-d978-4384-9a6e-9658d3bf97ef" />
+### Confusion Matrix
+<img src="https://github.com/user-attachments/assets/fcfc0d77-d425-4295-a17b-1bc30ccac05b" width="500"/>
 
-Sample predictions from the model:
-<img width="4500" height="1500" alt="image" src="https://github.com/user-attachments/assets/0e67d670-60fc-498c-b971-5d59619fb9f8" />
+---
 
+### Training Curve
+<img src="https://github.com/user-attachments/assets/183617e4-d978-4384-9a6e-9658d3bf97ef" width="700"/>
 
+---
 
+### Sample Predictions
+<img src="https://github.com/user-attachments/assets/0e67d670-60fc-498c-b971-5d59619fb9f8" width="700"/>
 
 ## Acknowledgements
 
