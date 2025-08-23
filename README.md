@@ -44,7 +44,7 @@ This project aims to assist medical professionals in the early and accurate diag
 ---
 
 ### Confusion Matrix
-<img src="https://github.com/user-attachments/assets/fcfc0d77-d425-4295-a17b-1bc30ccac05b" width="500"/>
+<img src="https://github.com/user-attachments/assets/fcfc0d77-d425-4295-a17b-1bc30ccac05b" width="400"/>
 
 ---
 
