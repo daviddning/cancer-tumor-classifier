@@ -71,4 +71,5 @@ This project aims to assist medical professionals in the early and accurate diag
 
 - [Scripts](scripts) – code to train the EfficientNetV2-S model  
 - [EDA Notebook](notebooks/eda_brain_umor.ipynb) – exploratory data analysis on MRI dataset  
-- [Reports](reports) – summary of methodology and results  
+- [Reports](reports) – summary of methodology and results
+- [Datasets](DATASETS.md) - Datasets used
