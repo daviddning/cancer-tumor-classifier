@@ -1,4 +1,4 @@
-<img width="860" height="507" alt="image" src="https://github.com/user-attachments/assets/a8528f21-56dc-422b-9722-af143d0b1b98" /># Brain Tumor Classification - Deep Learning Model
+# Brain Tumor Classification - Deep Learning Model
 
 This project uses a deep learning model based on EfficientNetV2-S transfer learning to classify MRI scans for early detection of three brain tumor types.
 
