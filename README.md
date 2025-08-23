@@ -65,4 +65,10 @@ This project aims to assist medical professionals in the early and accurate diag
   Develop a simple web app or API to allow users to test the model in real-world settings.  
 
 - **Extended Evaluation**:  
-  Evaluate the model on additional independent MRI datasets to test its performance across different imaging conditions.  
+  Evaluate the model on additional independent MRI datasets to test its performance across different imaging conditions.
+
+## Repository Structure
+
+- [Scripts](scripts) – code to train the EfficientNetV2-S model  
+- [EDA Notebook](notebooks/eda_brain_umor.ipynb) – exploratory data analysis on MRI dataset  
+- [Reports](reports) – summary of methodology and results  
