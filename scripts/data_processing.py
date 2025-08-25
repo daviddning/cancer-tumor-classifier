@@ -1,132 +1,240 @@
 import os
+import random
 from pathlib import Path
-from PIL import Image
-import numpy as np
+from typing import List, Tuple, Dict
 import torch
-from torchvision import transforms
+from PIL import Image
 from sklearn.model_selection import train_test_split
+from torchvision import transforms
+from torchvision.transforms import AutoAugment, AutoAugmentPolicy
+from config import (
+    TRAIN_DIR, TEST_DIR, VAL_SPLIT, RANDOM_STATE,
+    CLASSES, IMAGE_SIZE, MEAN, SD, AUTOAUGMENT
+)
 
-BASE_DIR = Path(__file__).parent.parent.resolve()
+# directories
+DATA_DIR = Path(__file__).parent.parent / 'data'
+PROCESSED_DIR = DATA_DIR / 'processed'
+PROCESSED_TRAIN_DIR = PROCESSED_DIR / 'training'
+PROCESSED_VAL_DIR = PROCESSED_DIR / 'validation'
+PROCESSED_TEST_DIR = PROCESSED_DIR / 'testing'
 
-RAW_DATA_DIR = BASE_DIR / "data" / "raw"
-PROCESSED_TRAIN_DIR = BASE_DIR / "data" / "processed" / "training"
-PROCESSED_VAL_DIR = BASE_DIR / "data" / "processed" / "validation"
-PROCESSED_TEST_DIR = BASE_DIR / "data" / "processed" / "testing-1"
+# random seeds for reproducibility
+torch.manual_seed(RANDOM_STATE)
+random.seed(RANDOM_STATE)
 
-CLASSES = ['glioma', 'meningioma', 'pituitary']
+def get_train_transform() -> transforms.Compose:
+    """create transforms for training data with augmentation."""
+    augs = [
+        transforms.Resize(IMAGE_SIZE),
+        transforms.RandomHorizontalFlip(0.5),
+        transforms.RandomVerticalFlip(0.5),
+        transforms.RandomRotation(15),
+    ]
+    
+    if AUTOAUGMENT:
+        augs.append(AutoAugment(AutoAugmentPolicy.IMAGENET))
+    
+    augs.extend([
+        transforms.ToTensor(),
+        transforms.Normalize(MEAN, SD)
+    ])
+    
+    return transforms.Compose(augs)
 
-TRAIN_RATIO = 0.75
-VAL_RATIO = 0.10
-TEST_RATIO = 0.15
+def get_val_test_transform() -> transforms.Compose:
+    """transforms for validation/test data (no augmentation)."""
+    return transforms.Compose([
+        transforms.Resize(IMAGE_SIZE),
+        transforms.ToTensor(),
+        transforms.Normalize(MEAN, SD)
+    ])
 
-# transformations for training images
-train_transform = transforms.Compose([
-    transforms.ToPILImage(),
-    transforms.Resize((384, 384)),
-    transforms.AutoAugment(policy=transforms.AutoAugmentPolicy.IMAGENET),
-    transforms.Grayscale(num_output_channels=3),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                         std=[0.229, 0.224, 0.225])
-])
+# Initialize transforms
+train_transform = get_train_transform()
+val_test_transform = get_val_test_transform()
 
-# transformations for validation and test images
-val_test_transform = transforms.Compose([
-    transforms.ToPILImage(),
-    transforms.Resize((384, 384)),
-    transforms.Grayscale(num_output_channels=3),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                         std=[0.229, 0.224, 0.225])
-])
-
-# determine class name based on folder name
 def get_class_from_foldername(filepath: Path) -> str:
+    """extract class name from directory path."""
     foldername = filepath.parent.name.lower()
+    
+    # Map folder names to class names
     if 'glioma' in foldername:
         return 'glioma'
-    elif 'menin' in foldername:
+    if 'meningioma' in foldername:
         return 'meningioma'
-    elif 'pituitary' in foldername:
+    if 'pituitary' in foldername:
         return 'pituitary'
-    else:
-        raise ValueError(f"unknown class for folder: {foldername}")
+    if 'no' in foldername and 'tumor' in foldername:
+        return 'no_tumor'
+    
+    # fallback to exact match if needed
+    for cls in CLASSES:
+        if cls.lower() in foldername:
+            return cls
+    
+    raise ValueError(f"unknown class for folder: {foldername}")
 
-# collect image file paths grouped by class
-def collect_files_by_class(raw_data_dir: Path) -> dict:
+def collect_files_by_class(data_dir: Path) -> Dict[str, List[Path]]:
+    """gather all image files, organized by class."""
+    if not data_dir.exists():
+        raise FileNotFoundError(f"dataset directory not found: {data_dir}")
+    
+    # image formats
+    img_exts = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff'}
     class_files = {cls: [] for cls in CLASSES}
-    valid_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff'}
-
-    for filepath in raw_data_dir.rglob("*"):
-        if filepath.is_file() and filepath.suffix.lower() in valid_extensions:
-            try:
-                class_name = get_class_from_foldername(filepath)
-                class_files[class_name].append(filepath)
-            except ValueError as e:
-                print(f"skipping file {filepath.name}: {e}")
+    
+    for class_dir in data_dir.iterdir():
+        if not class_dir.is_dir():
+            continue
+            
+        # find all image files in this directory
+        images = []
+        for ext in img_exts:
+            images.extend(class_dir.glob(f'*{ext}'))
+            
+        if not images:
+            print(f"no images found in {class_dir}")
+            continue
+            
+        try:
+            # get class name from directory 
+            class_name = get_class_from_foldername(images[0])
+            if class_name not in CLASSES:
+                print(f"skipping unknown class: {class_dir.name}")
+                continue
+                
+            class_files[class_name] = images
+            print(f"found {len(images)} {class_name} images")
+            
+        except Exception as e:
+            print(f"error in {class_dir}: {str(e)}")
+    
     return class_files
 
-# split each class's files into train, validation, and test lists
-def split_data(class_files: dict):
-    train_files, val_files, test_files = [], [], []
-
+def split_data(class_files: Dict[str, List[Path]]) -> tuple[list, list]:
+    """split data into training and validation sets."""
+    train_files, val_files = [], []
+    
     for class_name, files in class_files.items():
-        class_train, class_test = train_test_split(
-            files, test_size=TEST_RATIO, random_state=55)
-        class_train, class_val = train_test_split(
-            class_train, test_size=VAL_RATIO / (TRAIN_RATIO + VAL_RATIO), random_state=55)
+        if not files:
+            continue
+            
+        # split this class's files
+        train, val = train_test_split(
+            files,
+            test_size=VAL_SPLIT,
+            random_state=RANDOM_STATE,
+            shuffle=True
+        )
+        
+        # add (file, class) pairs
+        train_files.extend((f, class_name) for f in train)
+        val_files.extend((f, class_name) for f in val)
+    
+    # shuffle to mix up the classes
+    random.shuffle(train_files)
+    random.shuffle(val_files)
+    
+    print(f"Training: {len(train_files)} images")
+    print(f"Validation: {len(val_files)} images")
+    
+    return train_files, val_files
 
-        train_files.extend([(f, class_name) for f in class_train])
-        val_files.extend([(f, class_name) for f in class_val])
-        test_files.extend([(f, class_name) for f in class_test])
-
-    return train_files, val_files, test_files
-
-# apply transforms and save tensors to destination directory
-def process_and_save(file_class_list, dest_dir: Path, transform):
-    for fpath, class_name in file_class_list:
+def process_and_save(file_class_list: list[tuple[Path, str]], 
+                    dest_dir: Path, 
+                    transform: transforms.Compose,
+                    split_name: str = '') -> None:
+    """process images and save them as tensors."""
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    processed = 0
+    
+    for i, (img_path, class_name) in enumerate(file_class_list, 1):
         try:
-            img = Image.open(fpath).convert('RGB')
-            img_np = np.array(img)
-            tensor = transform(img_np)
-            class_dir = dest_dir / class_name
-            class_dir.mkdir(parents=True, exist_ok=True)
-            save_name = f"{fpath.stem}.pt"
-            save_path = class_dir / save_name
-            torch.save(tensor, save_path)
+            # load and transform image
+            img = Image.open(img_path).convert('RGB')
+            tensor = transform(img)
+            
+            # save to class directory
+            save_dir = dest_dir / class_name
+            save_dir.mkdir(exist_ok=True)
+            torch.save(tensor, save_dir / f"{img_path.stem}.pt")
+            
+            processed += 1
+            if i % 100 == 0 or i == len(file_class_list):
+                print(f"{split_name}: Processed {i}/{len(file_class_list)}")
+                
         except Exception as e:
-            print(f"failed to process {fpath}: {e}")
+            print(f"Error with {img_path.name}: {str(e)}")
+    
+    print(f"finished. Processed {processed}/{len(file_class_list)} images for {split_name}")
 
-# main entry point for preprocessing
+def load_test_files() -> list[tuple[Path, str]]:
+    """load test images and their corresponding classes."""
+    if not TEST_DIR.exists():
+        raise FileNotFoundError(f"Test directory not found: {TEST_DIR}")
+    
+    test_files = []
+    img_exts = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff'}
+    
+    for class_dir in TEST_DIR.iterdir():
+        if not class_dir.is_dir():
+            continue
+            
+        # find all test images
+        images = []
+        for ext in img_exts:
+            images.extend(class_dir.glob(f'*{ext}'))
+            
+        if not images:
+            print(f"no test images in {class_dir.name}")
+            continue
+            
+        try:
+            class_name = get_class_from_foldername(images[0])
+            if class_name not in CLASSES:
+                print(f"skipping unknown test class: {class_dir.name}")
+                continue
+                
+            test_files.extend((img, class_name) for img in images)
+            print(f"found {len(images)} {class_name} test images")
+            
+        except Exception as e:
+            print(f"error loading test images from {class_dir}: {str(e)}")
+    
+    return test_files
+
 def main():
-    print(f"collecting files from {RAW_DATA_DIR}...")
-    class_files = collect_files_by_class(RAW_DATA_DIR)
-
-    total_files = sum(len(files) for files in class_files.values())
-    print(f"found {total_files} images total.")
-    for cls, files in class_files.items():
-        print(f"{cls}: {len(files)} images")
-
-    train_files, val_files, test_files = split_data(class_files)
-
-    print("\nfinal counts:")
-    print(f"train: {len(train_files)}")
-    print(f"validation: {len(val_files)}")
-    print(f"test: {len(test_files)}")
-
-    print("\nprocessing training set...")
-    process_and_save(train_files, PROCESSED_TRAIN_DIR, train_transform)
-
-    print("processing validation set...")
-    process_and_save(val_files, PROCESSED_VAL_DIR, val_test_transform)
-
-    print("processing test set...")
-    process_and_save(test_files, PROCESSED_TEST_DIR, val_test_transform)
-
-    print("\ndone processing and saving all images.")
-    print(f"training images saved to: {PROCESSED_TRAIN_DIR}")
-    print(f"validation images saved to: {PROCESSED_VAL_DIR}")
-    print(f"test images saved to: {PROCESSED_TEST_DIR}")
-
+    print("starting data processing.")
+    
+    try:
+        # output directories
+        for d in [PROCESSED_TRAIN_DIR, PROCESSED_VAL_DIR, PROCESSED_TEST_DIR]:
+            d.mkdir(parents=True, exist_ok=True)
+        
+        # process training and validation data
+        print("\nloading training data.")
+        train_data = collect_files_by_class(TRAIN_DIR)
+        train_files, val_files = split_data(train_data)
+        
+        # process test data
+        print("\nloading test data.")
+        test_files = load_test_files()
+        
+        # process and save all datasets
+        print("\nprocessing datasets.")
+        process_and_save(train_files, PROCESSED_TRAIN_DIR, train_transform, "Training")
+        process_and_save(val_files, PROCESSED_VAL_DIR, val_test_transform, "Validation")
+        process_and_save(test_files, PROCESSED_TEST_DIR, val_test_transform, "Testing")
+        
+        # summary
+        print("data processing complete")
+        print(f"training:   {len(train_files):5d} images")
+        print(f"validation: {len(val_files):5d} images")
+        print(f"test:       {len(test_files):5d} images")
+        
+    except Exception as e:
+        print(f"\nerror: {str(e)}")
+        raise
 if __name__ == "__main__":
     main()
