@@ -5,7 +5,7 @@ import numpy as np
 import random
 
 # data paths
-BASE_DIR = Path("..")
+BASE_DIR = Path(os.path.dirname(os.path.abspath(__file__))).parent
 DATA_DIR = BASE_DIR / "data" 
 RAW_DIR = DATA_DIR / 'raw' 
 PROCESSED_DIR = DATA_DIR / 'processed'
