@@ -48,8 +48,8 @@ DROPOUT_RATE = 0.4
 
 # normalization
 IMAGE_SIZE = 384  
-MEAN = [0.482, 0.458, 0.408]
-STD = [0.231, 0.226, 0.225]
+MEAN = [0.485, 0.456, 0.406]
+STD = [0.229, 0.224, 0.225]
 
 # Grad-CAM 
 GRADCAM_CONFIG = {

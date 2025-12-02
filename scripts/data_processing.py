@@ -1,4 +1,3 @@
-
 ## data processing pipeline for brain tumor classification ##
 ## data loading, augmentation, train/val/test splitting, and dataset preparation ##
 
@@ -19,7 +18,7 @@ from config import (
     RAW_DIR, PROCESSED_DIR, TRAIN_DIR, TEST_DIR,
     CLASSES, NUM_CLASSES, BATCH_SIZE, NUM_WORKERS,
     PIN_MEMORY, PERSISTENT_WORKERS, IMAGE_SIZE,
-    MEAN, STD, DEVICE
+    MEAN, STD, DEVICE, GRAPHICS_DIR
 )
 
 
@@ -81,14 +80,8 @@ def get_train_transforms():
             transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 1.0))
         ], p=0.3),
         
-        # erasing
+        # convert to tensor and normalize (no erasing)
         transforms.ToTensor(),
-        transforms.RandomErasing(
-            p=0.3,
-            scale=(0.02, 0.15),  # Small patches
-            ratio=(0.3, 3.3),
-            value='random'
-        ),
         
         # normalize using RadImageNet stats
         transforms.Normalize(mean=MEAN, std=STD)
@@ -224,15 +217,63 @@ def create_splits(
     }
     
     # print split stats
-    print("\n" + "="*60)
-    print("data splits")
-    print("="*60)
+    print("\ndata splits")
     analyze_dataset(train_labels, "training set")
     analyze_dataset(val_labels, "validation set")
     analyze_dataset(test_labels, "test set")
-    print("="*60)
     
     return splits
+
+
+def save_augmented_samples(
+    dataset: BrainTumorDataset,
+    num_samples_per_class: int = 3,
+    graphics_dir: Path = GRAPHICS_DIR
+):
+    ## save 3 augmented samples from each class ##
+    
+    # create graphics directory if it doesn't exist
+    graphics_dir.mkdir(parents=True, exist_ok=True)
+    
+    # get indices for each class
+    class_indices = {class_idx: [] for class_idx in range(NUM_CLASSES)}
+    for idx, label in enumerate(dataset.labels):
+        class_indices[label].append(idx)
+    
+    print(f"\nsaving augmented samples to {graphics_dir}")
+    
+    for class_idx, class_name in enumerate(CLASSES):
+        if len(class_indices[class_idx]) == 0:
+            print(f"  warning: no samples found for class {class_name}")
+            continue
+        
+        # use first sample from this class
+        sample_idx = class_indices[class_idx][0]
+        
+        for i in range(num_samples_per_class):
+            # get augmented image (different each time)
+            aug_img, _ = dataset[sample_idx]
+            
+            # denormalize for saving
+            aug_img_display = aug_img.clone()
+            for t, m, s in zip(aug_img_display, MEAN, STD):
+                t.mul_(s).add_(m)
+            aug_img_display = torch.clamp(aug_img_display, 0, 1)
+            
+            # convert to PIL image
+            aug_img_np = aug_img_display.permute(1, 2, 0).numpy()
+            aug_img_np = (aug_img_np * 255).astype(np.uint8)
+            aug_img_pil = Image.fromarray(aug_img_np)
+            
+            # save image
+            filename = f"{class_name}_aug_{i+1}.png"
+            filepath = graphics_dir / filename
+            aug_img_pil.save(filepath)
+            
+            print(f"  saved: {filename}")
+    
+    print("done saving augmented samples")
+
 
 def create_dataloaders(
     splits: Dict,
@@ -294,7 +335,7 @@ def create_dataloaders(
     print(f"Validation batches: {len(dataloaders['val'])}")
     print(f"Test batches: {len(dataloaders['test'])}")
     
-    return dataloaders
+    return dataloaders, datasets
 
 
 def process_and_prepare_data(
@@ -302,7 +343,7 @@ def process_and_prepare_data(
     output_dir: Path = PROCESSED_DIR,
     val_size: float = 0.15,
     test_size: float = 0.15
-) -> Dict[str, DataLoader]:
+) -> Tuple[Dict[str, DataLoader], Dict[str, Dataset]]:
     
     ## process data ##
 
@@ -320,16 +361,15 @@ def process_and_prepare_data(
     
     
     # create dataloaders
-    print("\ncreating DataLoaders...")
-    dataloaders = create_dataloaders(splits)
+    print("\ncreating dataLoaders...")
+    dataloaders, datasets = create_dataloaders(splits)
     
     print("done")
-    print("-"*60)
     print(f"train samples: {len(splits['train'][0])}")
     print(f"val samples: {len(splits['val'][0])}")
     print(f"test samples: {len(splits['test'][0])}")
     
-    return dataloaders
+    return dataloaders, datasets
 
 
 if __name__ == "__main__":
@@ -337,9 +377,12 @@ if __name__ == "__main__":
     ## run ts ##
     
     # process data and create dataloaders
-    dataloaders = process_and_prepare_data()
+    dataloaders, datasets = process_and_prepare_data()
     
-    # verify by loading a batch
+    # save 3 augmented samples from each class
+    save_augmented_samples(datasets['train'])
+    
+    # vtest batch-loading
     print("\nloading sample batch...")
     
     train_loader = dataloaders['train']
