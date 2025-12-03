@@ -2,7 +2,6 @@
 ## data loading, augmentation, train/val/test splitting, and dataset preparation ##
 
 import os
-import shutil
 from pathlib import Path
 from typing import Tuple, Dict, List
 import numpy as np
@@ -331,16 +330,15 @@ def create_dataloaders(
     }
     
     print("\n dataloaders created")
-    print(f"Training batches: {len(dataloaders['train'])}")
-    print(f"Validation batches: {len(dataloaders['val'])}")
-    print(f"Test batches: {len(dataloaders['test'])}")
+    print(f"training batches: {len(dataloaders['train'])}")
+    print(f"validation batches: {len(dataloaders['val'])}")
+    print(f"test batches: {len(dataloaders['test'])}")
     
     return dataloaders, datasets
 
 
 def process_and_prepare_data(
     raw_data_dir: Path = RAW_DIR,
-    output_dir: Path = PROCESSED_DIR,
     val_size: float = 0.15,
     test_size: float = 0.15
 ) -> Tuple[Dict[str, DataLoader], Dict[str, Dataset]]:
