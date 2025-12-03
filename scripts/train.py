@@ -12,19 +12,23 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, ReduceLROnPlateau
 from torchvision import models
+from torchvision.models import ResNet50_Weights
 from tqdm import tqdm
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, confusion_matrix
 import matplotlib.pyplot as plt
 import seaborn as sns
 
 from config import (
-    CLASSES, NUM_CLASSES, DEVICE, CHECKPOINT_DIR, GRAPHICS_DIR,
+    CLASSES, NUM_CLASSES, DEVICE, CHECKPOINT_DIR, GRAPHICS_DIR, GRADCAM_DIR,
     STAGE1_EPOCHS, STAGE2_EPOCHS, STAGE3_EPOCHS,
     LR_STAGE1, LR_STAGE2, LR_STAGE3, WEIGHT_DECAY,
     PATIENCE_STAGE2, PATIENCE_STAGE3, MIN_DELTA_STAGE2, MIN_DELTA_STAGE3,
-    DROPOUT_RATE, GRADIENT_CLIP, LABEL_SMOOTHING
+    DROPOUT_RATE, GRADIENT_CLIP, LABEL_SMOOTHING, BATCH_SIZE, NUM_WORKERS, PIN_MEMORY, PERSISTENT_WORKERS,
+    STAGE1_T0, STAGE1_T_MULT, STAGE2_LR_FACTOR, STAGE2_SCHEDULER_PATIENCE, STAGE3_LR_FACTOR, STAGE3_SCHEDULER_PATIENCE,
+    PRETRAINED_WEIGHTS_PATH, GRADCAM_CONFIG
 )
 from data_processing import process_and_prepare_data, save_augmented_samples
+from gradcam_utils import create_gradcam_visualization
 
 
 
@@ -36,7 +40,13 @@ class BrainTumorClassifier(nn.Module):
         super(BrainTumorClassifier, self).__init__()
         
         # load pre-trained resnet50
-        self.backbone = models.resnet50(pretrained=pretrained)
+        weights = ResNet50_Weights.DEFAULT if pretrained else None
+        self.backbone = models.resnet50(weights=weights)
+        
+        # load custom weights if provided
+        if PRETRAINED_WEIGHTS_PATH is not None:
+            checkpoint = torch.load(PRETRAINED_WEIGHTS_PATH, map_location=DEVICE)
+            self.backbone.load_state_dict(checkpoint)
         
         # get feature dimension
         num_features = self.backbone.fc.in_features
@@ -63,25 +73,13 @@ class BrainTumorClassifier(nn.Module):
         features = self.backbone(x)
         output = self.classifier(features)
         return output
-    
-    
-    def get_backbone_params(self):
-        ## returns backbone parameters for stage-specific training ##
-
-        return self.backbone.parameters()
-    
-    
-    def get_classifier_params(self):
-        ## returns classifier head parameters ##
-
-        return self.classifier.parameters()
 
 
 class EarlyStopping:
     
     ## early stopping to prevent overfitting ##
 
-    def __init__(self, patience=7, min_delta=0.001, mode='max'):
+    def __init__(self, patience=PATIENCE_STAGE2, min_delta=MIN_DELTA_STAGE2, mode='max'):
         self.patience = patience
         self.min_delta = min_delta
         self.mode = mode
@@ -217,12 +215,12 @@ def plot_confusion_matrix(y_true, y_pred, save_path: Path, title: str):
 
 
 def train_epoch(model, dataloader, criterion, optimizer, device, clip_grad=GRADIENT_CLIP):
+    ## train for one epoch ##
+    
     model.train()
     running_loss = 0.0
     all_preds = []
     all_labels = []
-
-    ## train for one epoch ##
     
     pbar = tqdm(dataloader, desc='Training', leave=False)
     for inputs, labels in pbar:
@@ -261,12 +259,12 @@ def train_epoch(model, dataloader, criterion, optimizer, device, clip_grad=GRADI
 
 
 def validate_epoch(model, dataloader, criterion, device):
+    ## validate for one epoch ##
+    
     model.eval()
     running_loss = 0.0
     all_preds = []
     all_labels = []
-    
-    ## validate for one epoch ##
 
     with torch.no_grad():
         pbar = tqdm(dataloader, desc='Validation', leave=False)
@@ -326,7 +324,7 @@ def stage1_training(model, dataloaders, device):
     
     criterion = nn.CrossEntropyLoss(label_smoothing=LABEL_SMOOTHING)
     optimizer = optim.AdamW(model.classifier.parameters(), lr=LR_STAGE1, weight_decay=WEIGHT_DECAY)
-    scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=5, T_mult=1)
+    scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=STAGE1_T0, T_mult=STAGE1_T_MULT)
     
     metrics_tracker = MetricsTracker()
     best_val_acc = 0.0
@@ -341,6 +339,9 @@ def stage1_training(model, dataloaders, device):
         
         # validate
         val_metrics, val_labels, val_preds = validate_epoch(model, dataloaders['val'], criterion, device)
+        
+        # re-enable training mode for next epoch
+        model.train()
         
         # update learning rate
         scheduler.step()
@@ -367,6 +368,15 @@ def stage1_training(model, dataloaders, device):
     
     # load best weights
     model.load_state_dict(best_model_wts)
+    
+    # gradcam visualization
+    if GRADCAM_CONFIG['checkpoints']['stage1_end']:
+        create_gradcam_visualization(
+            model, dataloaders['val'], 'stage1', 
+            STAGE1_EPOCHS - 1,
+            num_samples=GRADCAM_CONFIG['samples_per_class'],
+            save_dir=GRADCAM_DIR
+        )
     
     # plot metrics
     metrics_tracker.plot_metrics(GRAPHICS_DIR / 'stage1_metrics.png', 'Stage 1')
@@ -404,7 +414,7 @@ def stage2_training(model, dataloaders, device):
         {'params': model.classifier.parameters(), 'lr': LR_STAGE2}
     ], weight_decay=WEIGHT_DECAY)
     
-    scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3, verbose=True)
+    scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=STAGE2_LR_FACTOR, patience=STAGE2_SCHEDULER_PATIENCE, verbose=True)
     early_stopping = EarlyStopping(patience=PATIENCE_STAGE2, min_delta=MIN_DELTA_STAGE2, mode='max')
     
     metrics_tracker = MetricsTracker()
@@ -420,6 +430,9 @@ def stage2_training(model, dataloaders, device):
         
         # validate
         val_metrics, val_labels, val_preds = validate_epoch(model, dataloaders['val'], criterion, device)
+        
+        # re-enable training mode for next epoch
+        model.train()
         
         # update learning rate
         scheduler.step(val_metrics['acc'])
@@ -452,6 +465,15 @@ def stage2_training(model, dataloaders, device):
     
     # load best weights
     model.load_state_dict(best_model_wts)
+    
+    # gradcam visualization
+    if GRADCAM_CONFIG['checkpoints']['stage2_end']:
+        create_gradcam_visualization(
+            model, dataloaders['val'], 'stage2', 
+            epoch,
+            num_samples=GRADCAM_CONFIG['samples_per_class'],
+            save_dir=GRADCAM_DIR
+        )
     
     # plot metrics
     metrics_tracker.plot_metrics(GRAPHICS_DIR / 'stage2_metrics.png', 'Stage 2')
@@ -489,7 +511,7 @@ def stage3_training(model, dataloaders, device):
         {'params': model.classifier.parameters(), 'lr': LR_STAGE3}
     ], weight_decay=WEIGHT_DECAY)
     
-    scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.3, patience=5, verbose=True)
+    scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=STAGE3_LR_FACTOR, patience=STAGE3_SCHEDULER_PATIENCE, verbose=True)
     early_stopping = EarlyStopping(patience=PATIENCE_STAGE3, min_delta=MIN_DELTA_STAGE3, mode='max')
     
     metrics_tracker = MetricsTracker()
@@ -505,6 +527,9 @@ def stage3_training(model, dataloaders, device):
         
         # validate
         val_metrics, val_labels, val_preds = validate_epoch(model, dataloaders['val'], criterion, device)
+        
+        # re-enable training mode for next epoch
+        model.train()
         
         # update learning rate
         scheduler.step(val_metrics['acc'])
@@ -536,6 +561,16 @@ def stage3_training(model, dataloaders, device):
                 CHECKPOINT_DIR / f'stage3_epoch_{epoch+1}.pth'
             )
         
+        # gradcam visualization at intervals
+        if GRADCAM_CONFIG['checkpoints']['stage3_interval'] > 0:
+            if (epoch + 1) % GRADCAM_CONFIG['checkpoints']['stage3_interval'] == 0:
+                create_gradcam_visualization(
+                    model, dataloaders['val'], 'stage3', 
+                    epoch,
+                    num_samples=GRADCAM_CONFIG['samples_per_class'],
+                    save_dir=GRADCAM_DIR
+                )
+        
         # early stopping
         if early_stopping(val_metrics['acc'], epoch):
             print(f"\nEarly stopping triggered at epoch {epoch+1}")
@@ -544,6 +579,15 @@ def stage3_training(model, dataloaders, device):
     
     # load best weights
     model.load_state_dict(best_model_wts)
+    
+    # gradcam visualization
+    if GRADCAM_CONFIG['checkpoints']['stage3_start']:
+        create_gradcam_visualization(
+            model, dataloaders['val'], 'stage3', 
+            epoch,
+            num_samples=GRADCAM_CONFIG['samples_per_class'],
+            save_dir=GRADCAM_DIR
+        )
     
     # plot metrics
     metrics_tracker.plot_metrics(GRAPHICS_DIR / 'stage3_metrics.png', 'Stage 3')
@@ -566,6 +610,7 @@ def evaluate_final_model(model, dataloader, device):
     print("FINAL EVALUATION ON TEST SET")
     print("="*80)
     
+    # evaluate in eval mode
     model.eval()
     all_preds = []
     all_labels = []

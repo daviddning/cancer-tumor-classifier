@@ -44,6 +44,14 @@ PATIENCE_STAGE3 = 10
 MIN_DELTA_STAGE2 = 0.002
 MIN_DELTA_STAGE3 = 0.0007
 
+# scheduler parameters
+STAGE1_T0 = 5
+STAGE1_T_MULT = 1
+STAGE2_LR_FACTOR = 0.5
+STAGE2_SCHEDULER_PATIENCE = 3
+STAGE3_LR_FACTOR = 0.3
+STAGE3_SCHEDULER_PATIENCE = 5
+
 DROPOUT_RATE = 0.4
 
 # normalization
@@ -51,7 +59,7 @@ IMAGE_SIZE = 384
 MEAN = [0.485, 0.456, 0.406]
 STD = [0.229, 0.224, 0.225]
 
-# Grad-CAM 
+# grad-CAM 
 GRADCAM_CONFIG = {
     'target_layers': ['layer4.2'],  
     'colormap': 'jet',            
@@ -83,6 +91,7 @@ METRICS = ['accuracy', 'f1_score', 'precision', 'recall']
 
 DEVICE = torch.device("cuda")
 MODEL_SAVE_PATH = BASE_DIR / "models" / "brain_tumor_model.pth"
+PRETRAINED_WEIGHTS_PATH = None
 
 # seed for reproducibility
 torch.manual_seed(88)
