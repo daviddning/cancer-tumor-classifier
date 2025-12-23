@@ -7,10 +7,12 @@ import numpy as np
 import random
 
 ## data paths ##
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data" 
 RAW_DIR = DATA_DIR / 'raw' 
 PROCESSED_DIR = DATA_DIR / 'processed'
+TRAIN_DIR = PROCESSED_DIR / 'train'
+TEST_DIR = PROCESSED_DIR / 'test'
 GRAPHICS_DIR = BASE_DIR / "graphics"
 GRADCAM_DIR = GRAPHICS_DIR / 'gradcam'
 CHECKPOINT_DIR = BASE_DIR / 'checkpoints'
@@ -19,13 +21,30 @@ CHECKPOINT_DIR = BASE_DIR / 'checkpoints'
 CLASSES = ['glioma', 'meningioma', 'pituitary']
 NUM_CLASSES = len(CLASSES)
 
+## data splitting ##
+VAL_SIZE = 0.15
+TEST_SIZE = 0.15
+SPLIT_RANDOM_STATE = 88
+
+## augmentation settings ##
+AUG_SAMPLES_PER_CLASS = 3
+ROTATION_DEGREES = 20
+GAUSSIAN_BLUR_PROB = 0.5
+VERTICAL_FLIP_PROB = 0.3
+HORIZONTAL_FLIP_PROB = 0.5
+
 ## training hyperparameters ##
 BATCH_SIZE = 32 
 NUM_WORKERS = 4 
 PIN_MEMORY = True  
-PERSISTENT_WORKERS = True 
+PERSISTENT_WORKERS = False
+PREFETCH_FACTOR = 2
+DROP_LAST_TRAIN = False
 GRADIENT_CLIP = 1.0  
 LABEL_SMOOTHING = 0.1 
+WEIGHT_DECAY = 0.01
+DROPOUT_RATE = 0.4
+USE_MIXED_PRECISION = True
 
 ## training phases ##
 STAGE1_EPOCHS = 5
@@ -36,7 +55,22 @@ STAGE3_EPOCHS = 25
 LR_STAGE1 = 1e-3
 LR_STAGE2 = 1e-5    
 LR_STAGE3 = 1e-6
-WEIGHT_DECAY = 0.01
+
+## stage 2 lr factors ##
+STAGE2_BACKBONE_LR_FACTOR = 0.1
+LR_STAGE2_BACKBONE = LR_STAGE2 * STAGE2_BACKBONE_LR_FACTOR
+LR_STAGE2_HEAD = LR_STAGE2
+
+## stage 3 lr factors ##
+STAGE3_LAYER1_LR_FACTOR = 0.01
+STAGE3_LAYER2_LR_FACTOR = 0.02
+STAGE3_LAYER3_LR_FACTOR = 0.05
+STAGE3_LAYER4_LR_FACTOR = 0.1
+LR_STAGE3_LAYER1 = LR_STAGE3 * STAGE3_LAYER1_LR_FACTOR
+LR_STAGE3_LAYER2 = LR_STAGE3 * STAGE3_LAYER2_LR_FACTOR
+LR_STAGE3_LAYER3 = LR_STAGE3 * STAGE3_LAYER3_LR_FACTOR
+LR_STAGE3_LAYER4 = LR_STAGE3 * STAGE3_LAYER4_LR_FACTOR
+LR_STAGE3_HEAD = LR_STAGE3
 
 ## early stopping ##
 PATIENCE_STAGE2 = 7
@@ -51,8 +85,6 @@ STAGE2_LR_FACTOR = 0.5
 STAGE2_SCHEDULER_PATIENCE = 3
 STAGE3_LR_FACTOR = 0.3
 STAGE3_SCHEDULER_PATIENCE = 5
-
-DROPOUT_RATE = 0.4
 
 ## image settings ##
 IMAGE_SIZE = 384  
@@ -93,3 +125,7 @@ if torch.cuda.is_available():
     torch.cuda.manual_seed_all(RANDOM_SEED)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+
+## create directories ##
+for directory in [DATA_DIR, RAW_DIR, PROCESSED_DIR, GRAPHICS_DIR, GRADCAM_DIR, CHECKPOINT_DIR]:
+    directory.mkdir(parents=True, exist_ok=True)
