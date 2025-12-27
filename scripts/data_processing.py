@@ -42,7 +42,7 @@ class BrainTumorDataset(Dataset):
 
 
 def get_train_transforms():
-    ## training augmentation based on BraTS challenge best practices ##
+    ## training augmentation ##
     return transforms.Compose([
         transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
         
