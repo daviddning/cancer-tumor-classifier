@@ -1,0 +1,2 @@
+min_tumor_size,max_tumor_size,mean_tumor_size,median_tumor_size,std_tumor_size,total_necrosis_pixels,total_edema_pixels,necrosis_percentage,edema_percentage,samples_analyzed,slices_with_small_tumors,slices_with_large_tumors
+1,6293,1487.532,1253.0,1220.4231876591004,743766,0,100.0,0.0,500,43,5

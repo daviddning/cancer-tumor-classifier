@@ -1,0 +1,2 @@
+slices_with_highest_prob,highest_probability,slices_with_lowest_prob,lowest_probability,mean_probability_all_slices,std_probability,slices_with_no_tumors,top_third_probability,middle_third_probability,bottom_third_probability
+74,90.8,0,0.0,42.69741935483871,33.71551137952292,26,18.8,81.39999999999999,27.6

@@ -1,0 +1,2 @@
+total_slices,tumor_slices,healthy_slices,tumor_percentage,healthy_percentage,total_patients,patients_with_tumors,avg_slices_per_patient
+57195,24422,32773,42.69953667278608,57.30046332721391,369,369,155.0
