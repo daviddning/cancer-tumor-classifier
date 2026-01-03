@@ -4,7 +4,7 @@ import torch
 DATA_PATH = Path.cwd() / "data"
 METADATA_PATH = DATA_PATH / "csv" / "meta_data.csv"
 SPLIT_SAVE_PATH = DATA_PATH / "splits"
-    
+
 # data split ratios
 TRAIN_RATIO = 0.7
 VAL_RATIO = 0.15
@@ -44,3 +44,21 @@ OUTPUT_ACTIVATION = 'sigmoid'
 GRADCAM_LAYER = 'bottleneck'  
 GRADCAM_SAVE_PATH = Path.cwd() / "graphics" / "gradcam"
 GRADCAM_SAVE_PATH.mkdir(parents=True, exist_ok=True)
+
+# loss hyperparameters
+
+# dice loss
+DICE_SMOOTH = 1.0
+
+# focal loss
+FOCAL_ALPHA = 0.25
+FOCAL_GAMMA = 2.0
+FOCAL_REDUCTION = 'mean'
+
+# bce loss
+POS_WEIGHT = 1.3  
+
+# combined loss
+DICE_WEIGHT = 0.5
+BCE_WEIGHT = 0.3
+FOCAL_WEIGHT = 0.2
