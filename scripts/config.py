@@ -28,3 +28,19 @@ GAUSSIAN_NOISE_PROB = 0.2
     
 # normalization strategy
 NORMALIZATION = "z_score"
+
+BASE_FILTERS = 64           
+DROPOUT_RATE = 0.2          
+USE_BATCH_NORM = True      
+ACTIVATION = 'relu'         
+
+# attention hyperparameters
+ATTENTION_REDUCTION = 2     
+
+# output hyperparameters
+OUTPUT_ACTIVATION = 'sigmoid'  
+
+# grad-CAM hyperparameters
+GRADCAM_LAYER = 'bottleneck'  
+GRADCAM_SAVE_PATH = Path.cwd() / "graphics" / "gradcam"
+GRADCAM_SAVE_PATH.mkdir(parents=True, exist_ok=True)
