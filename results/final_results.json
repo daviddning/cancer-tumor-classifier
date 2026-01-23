@@ -1,0 +1,29 @@
+{
+  "test_loss": 0.12098122019648241,
+  "test_dice": 0.6916219963366003,
+  "test_metrics": {
+    "precision": 0.7174802249690949,
+    "recall": 0.6675628081943313,
+    "f1": 0.6916219464015132,
+    "accuracy": 0.9988086237519199,
+    "dice": 0.6916219963366003,
+    "iou": 0.5286102291540287,
+    "tp": 667954.0,
+    "fp": 263018.0,
+    "tn": 498704396.0,
+    "fn": 332632.0,
+    "small_tumor_dice": 0.6458837551333715,
+    "small_tumor_count": 1641.0,
+    "avg_small_tumor_size": 170.92017062766607
+  },
+  "best_val_dice": 0.7433938187608868,
+  "total_epochs": 69,
+  "training_time_minutes": 643.6280846039455,
+  "model_parameters": 7852061,
+  "training_config": {
+    "batch_size": 4,
+    "base_filters": 32,
+    "dropout_rate": 0.2,
+    "random_seed": 88
+  }
+}

@@ -1,488 +1,880 @@
 """
-Attention U-Net with Grad-CAM for Brain Tumor Segmentation.
-Includes Grad-CAM visualization to monitor what the model is learning.
+Medical Image Segmentation Training Pipeline
+
+This module implements a complete training pipeline for medical image segmentation
+using an Attention U-Net architecture with custom loss functions optimized for
+small tumor detection.
+
+Key Features:
+- Custom loss functions for handling class imbalance and small tumors
+- Mixed precision training for efficient GPU utilization
+- Comprehensive metrics tracking and visualization
+- Early stopping and learning rate scheduling
+- Checkpoint management
+
+Author: [DAVID NING]
+Date: [01-22-2026]
 """
+
+
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.optim as optim
 import numpy as np
-import matplotlib.pyplot as plt
 from pathlib import Path
+import time
+import json
+import matplotlib.pyplot as plt
+import warnings
+warnings.filterwarnings('ignore')
+
 import config
-
-# activation helper
-def get_activation(activation_type):
-    """returns activation function based on string"""
-    if activation_type == 'relu':
-        return nn.ReLU(inplace=True)
-    elif activation_type == 'leaky_relu':
-        return nn.LeakyReLU(0.01, inplace=True)
-    elif activation_type == 'elu':
-        return nn.ELU(inplace=True)
-    else:
-        return nn.ReLU(inplace=True)
-
-# blocks
-class ConvBlock(nn.Module):
-    """
-    convolutional block: Conv -> BatchNorm -> Activation -> Conv -> BatchNorm -> Activation
-    standard U-Net building block with configurable activation and dropout
-    """
-    def __init__(self, in_channels, out_channels, dropout_rate=config.DROPOUT_RATE):
-        super(ConvBlock, self).__init__()
-        
-        layers = []
-        
-        # first conv block
-        layers.append(nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=not config.USE_BATCH_NORM))
-        if config.USE_BATCH_NORM:
-            layers.append(nn.BatchNorm2d(out_channels))
-        layers.append(get_activation(config.ACTIVATION))
-        
-        if dropout_rate > 0:
-            layers.append(nn.Dropout2d(dropout_rate))
-        
-        # second conv block
-        layers.append(nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=not config.USE_BATCH_NORM))
-        if config.USE_BATCH_NORM:
-            layers.append(nn.BatchNorm2d(out_channels))
-        layers.append(get_activation(config.ACTIVATION))
-        
-        if dropout_rate > 0:
-            layers.append(nn.Dropout2d(dropout_rate))
-        
-        self.conv = nn.Sequential(*layers)
-    
-    def forward(self, x):
-        return self.conv(x)
+from data_processing import *
+from model import AttentionUNet
 
 
-class AttentionGate(nn.Module):
+class SmallTumorDiceLoss(nn.Module):
     """
-    attention Gate for skip connections
-    helps model focus on relevant regions 
-    """
-    def __init__(self, F_g, F_l, F_int):
-        """
-        args:
-            F_g: number of feature channels from gating signal
-            F_l: number of feature channels from skip connection
-            F_int: number of intermediate channels
-        """
-        super(AttentionGate, self).__init__()
-        
-        # transform gating signal 
-        self.W_g = nn.Sequential(
-            nn.Conv2d(F_g, F_int, kernel_size=1, stride=1, padding=0, bias=True),
-            nn.BatchNorm2d(F_int) if config.USE_BATCH_NORM else nn.Identity()
-        )
-        
-        # transform skip connection
-        self.W_x = nn.Sequential(
-            nn.Conv2d(F_l, F_int, kernel_size=1, stride=1, padding=0, bias=True),
-            nn.BatchNorm2d(F_int) if config.USE_BATCH_NORM else nn.Identity()
-        )
-        
-        # generate attention coefficients
-        self.psi = nn.Sequential(
-            nn.Conv2d(F_int, 1, kernel_size=1, stride=1, padding=0, bias=True),
-            nn.BatchNorm2d(1) if config.USE_BATCH_NORM else nn.Identity(),
-            nn.Sigmoid()
-        )
-        
-        self.relu = nn.ReLU(inplace=True)
+    Custom Dice Loss with enhanced penalty for missed small tumors.
     
-    def forward(self, g, x):
+    The standard Dice loss is modified to give extra weight to small tumor regions
+    that are incorrectly predicted, helping the model learn to detect smaller lesions.
+    
+    Attributes:
+        smooth (float): Smoothing factor to avoid division by zero (default: 1.0)
+        small_weight (float): Additional weight for small tumor regions (default: 2.0)
+    """
+    def __init__(self, smooth=1.0, small_weight=2.0):
         """
-        args:
-            g: Gating signal from decoder (lower resolution)
-            x: Skip connection from encoder (higher resolution)
-        returns:
-            Attention-weighted skip connection and attention map
+        Initialize the SmallTumorDiceLoss.
+        
+        Args:
+            smooth (float): Smoothing constant to prevent division by zero
+            small_weight (float): Weight multiplier for small tumor regions
         """
-        # apply transformations
-        g1 = self.W_g(g)
-        x1 = self.W_x(x)
+        super().__init__()
+        self.smooth = smooth
+        self.small_weight = small_weight
+    
+    def forward(self, pred, target):
+        """
+        Compute the small tumor-aware Dice loss.
         
-        # combine and generate attention weights
-        psi = self.relu(g1 + x1)
-        attention_map = self.psi(psi)
+        Args:
+            pred (torch.Tensor): Predicted probabilities [B, 1, H, W], values in [0, 1]
+            target (torch.Tensor): Ground truth binary masks [B, 1, H, W], values in {0, 1}
         
-        # apply attention weights to skip connection
-        return x * attention_map, attention_map
+        Returns:
+            torch.Tensor: Scalar loss value (1 - dice_score)
+        """
+        # Flatten tensors for easier computation
+        pred = pred.view(-1)
+        target = target.view(-1)
+
+        # Calculate standard Dice score
+        intersection = (pred * target).sum()
+        dice_score = (2. * intersection + self.smooth) / (pred.sum() + target.sum() + self.smooth)
+        
+        small_mask = (target > 0) & (pred < 0.5)
+        
+        # Calculate Dice score specifically for small tumor regions
+        if small_mask.sum() > 0:
+            small_intersection = (pred[small_mask] * target[small_mask]).sum()
+            small_dice = (2. * small_intersection + self.smooth) / \
+                        (pred[small_mask].sum() + target[small_mask].sum() + self.smooth)
+            
+            # Weighted combination of standard and small tumor Dice
+            dice_score = (dice_score + self.small_weight * small_dice) / (1 + self.small_weight)
+        
+        # Return loss
+        return 1 - dice_score 
 
 
-# u-net model
-class AttentionUNet(nn.Module):
+class EnhancedCombinedLoss(nn.Module):
     """
-    U-Net with Attention Gates and Grad-CAM support
+    Multi-component loss function combining Dice, BCE, and Focal losses.
     
-    architecture:
-    - input: 4 channels (FLAIR, T1, T1ce, T2) at 240x240
-    - encoder: 4 downsampling blocks (64 -> 128 -> 256 -> 512)
-    - bottleneck: 1024 channels
-    - decoder: 4 upsampling blocks with attention gates
-    - output: 1 channel (binary tumor mask) at 240x240
+    This loss function addresses multiple challenges in medical image segmentation:
+    - Class imbalance (through focal loss and positive weighting)
+    - Small object detection (through small tumor-aware Dice loss)
+    - Pixel-wise accuracy (through BCE loss)
     
-    key features:
-    - attention gates help focus on small tumors
-    - skip connections preserve spatial information
-    - grad-CAM support for visualization
-    - configurable hyperparameters
+    Attributes:
+        dice_weight (float): Weight for Dice loss component (default: 0.5)
+        bce_weight (float): Weight for BCE loss component (default: 0.3)
+        focal_weight (float): Weight for Focal loss component (default: 0.2)
+        small_tumor_weight (float): Weight for small tumor emphasis (default: 1.5)
+        pos_weight (float): Positive class weight for BCE (default: 1.3)
+    
     """
+    def __init__(self, dice_weight=0.5, bce_weight=0.3, focal_weight=0.2, 
+                 small_tumor_weight=1.5, pos_weight=1.3):
+        """
+        Initialize the EnhancedCombinedLoss.
+        
+        Args:
+            dice_weight (float): Weight for Dice loss component
+            bce_weight (float): Weight for BCE loss component
+            focal_weight (float): Weight for Focal loss component
+            small_tumor_weight (float): Emphasis on small tumor detection
+            pos_weight (float): Weight for positive class in BCE
+        """
+        super().__init__()
+        self.dice_weight = dice_weight
+        self.bce_weight = bce_weight
+        self.focal_weight = focal_weight
+        self.dice_loss = SmallTumorDiceLoss(smooth=1.0, small_weight=small_tumor_weight)
+        self.register_buffer('pos_weight', torch.tensor([pos_weight]))
     
-    def __init__(self, in_channels=4, num_classes=1, base_filters=config.BASE_FILTERS):
+    def _focal_loss(self, pred_logits, target, alpha=0.25, gamma=2.0):
         """
-        args:
-            in_channels: number of input channels (4)
-            num_classes: number of output classes (1)
-            base_filters: number of filters in first layer (scales by 2 each level)
+        Compute Focal Loss for addressing class imbalance.
+        
+        Focal Loss down-weights easy examples and focuses training on hard negatives.
+        
+        Args:
+            pred_logits (torch.Tensor): Raw model outputs (before sigmoid)
+            target (torch.Tensor): Ground truth binary masks
+            alpha (float): Balancing factor for positive/negative classes (default: 0.25)
+            gamma (float): Focusing parameter (default: 2.0). Higher = more focus on hard examples
+        
+        Returns:
+            torch.Tensor: Scalar focal loss value
         """
-        super(AttentionUNet, self).__init__()
-        
-        # calculate filter sizes for each level
-        filters = [base_filters * (2**i) for i in range(5)]  # [64, 128, 256, 512, 1024]
-        
-        # store features for Grad-CAM
-        self.gradients = None
-        self.activations = None
-        self.attention_maps = {}
-        
-        # encoder
-        self.enc1 = ConvBlock(in_channels, filters[0])      # 4 -> 64
-        self.enc2 = ConvBlock(filters[0], filters[1])       # 64 -> 128
-        self.enc3 = ConvBlock(filters[1], filters[2])       # 128 -> 256
-        self.enc4 = ConvBlock(filters[2], filters[3])       # 256 -> 512
-        
-        # max pooling for downsampling
-        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
-        
-        # bottleneck
-        self.bottleneck = ConvBlock(filters[3], filters[4])  # 512 -> 1024
-        
-        # decoder
-        
-        # level 4
-        self.up4 = nn.ConvTranspose2d(filters[4], filters[3], kernel_size=2, stride=2)
-        self.att4 = AttentionGate(F_g=filters[3], F_l=filters[3], F_int=filters[3]//config.ATTENTION_REDUCTION)
-        self.dec4 = ConvBlock(filters[4], filters[3])  # 1024 -> 512
-        
-        # level 3
-        self.up3 = nn.ConvTranspose2d(filters[3], filters[2], kernel_size=2, stride=2)
-        self.att3 = AttentionGate(F_g=filters[2], F_l=filters[2], F_int=filters[2]//config.ATTENTION_REDUCTION)
-        self.dec3 = ConvBlock(filters[3], filters[2])  # 512 -> 256
-        
-        # level 2
-        self.up2 = nn.ConvTranspose2d(filters[2], filters[1], kernel_size=2, stride=2)
-        self.att2 = AttentionGate(F_g=filters[1], F_l=filters[1], F_int=filters[1]//config.ATTENTION_REDUCTION)
-        self.dec2 = ConvBlock(filters[2], filters[1])  # 256 -> 128
-        
-        # level 1
-        self.up1 = nn.ConvTranspose2d(filters[1], filters[0], kernel_size=2, stride=2)
-        self.att1 = AttentionGate(F_g=filters[0], F_l=filters[0], F_int=filters[0]//config.ATTENTION_REDUCTION)
-        self.dec1 = ConvBlock(filters[1], filters[0])  # 128 -> 64
-        
-        # output layer
-        self.out = nn.Conv2d(filters[0], num_classes, kernel_size=1)
+        # Calculate base binary cross-entropy
+        bce = F.binary_cross_entropy_with_logits(pred_logits, target, reduction='none')
+
+        # Calculate probability of correct class
+        pt = torch.exp(-bce)
+
+        # Apply focal weight: α(1-pt)^γ
+        focal_weight = alpha * (1 - pt) ** gamma
+
+        return (focal_weight * bce).mean()
     
-    def forward(self, x, return_attention=False):
+    def forward(self, pred_logits, target):
         """
-        forward pass through the network
+        Compute the combined loss from all components.
         
-        args:
-            x: input tensor of shape (batch, 4, 240, 240)
-            return_attention: if True, return attention maps for visualization
-        returns:
-            output tensor of shape (batch, 1, 240, 240) with values in [0, 1]
+        Args:
+            pred_logits (torch.Tensor): Raw model outputs [B, 1, H, W] (before sigmoid)
+            target (torch.Tensor): Ground truth binary masks [B, 1, H, W]
+        
+        Returns:
+            tuple: (total_loss, components_dict)
         """
-        # encoder
-        e1 = self.enc1(x)              # (B, 64, 240, 240)
-        e2 = self.enc2(self.pool(e1))  # (B, 128, 120, 120)
-        e3 = self.enc3(self.pool(e2))  # (B, 256, 60, 60)
-        e4 = self.enc4(self.pool(e3))  # (B, 512, 30, 30)
         
-        # bottleneck
-        b = self.bottleneck(self.pool(e4))  # (B, 1024, 15, 15)
+        # Apply sigmoid for Dice loss (requires probabilities)
+        pred_sigmoid = torch.sigmoid(pred_logits)
+        dice = self.dice_loss(pred_sigmoid, target)
+        bce = F.binary_cross_entropy_with_logits(pred_logits, target, pos_weight=self.pos_weight)
+        focal = self._focal_loss(pred_logits, target)
+        total = (self.dice_weight * dice + self.bce_weight * bce + self.focal_weight * focal)
         
-        # register hook for Grad-CAM
-        if config.GRADCAM_LAYER == 'bottleneck' and b.requires_grad:
-            b.register_hook(self.save_gradient)
-            self.activations = b
-        
-        # decoder
-        
-        # level 4
-        d4 = self.up4(b)                    # (B, 512, 30, 30)
-        e4_att, att_map4 = self.att4(d4, e4)  
-        d4 = torch.cat([d4, e4_att], dim=1) # (B, 1024, 30, 30)
-        d4 = self.dec4(d4)                  # (B, 512, 30, 30)
-        
-        if return_attention:
-            self.attention_maps['att4'] = att_map4
-        
-        if config.GRADCAM_LAYER == 'dec4' and d4.requires_grad:
-            d4.register_hook(self.save_gradient)
-            self.activations = d4
-        
-        # level 3
-        d3 = self.up3(d4)                   # (B, 256, 60, 60)
-        e3_att, att_map3 = self.att3(d3, e3)  
-        d3 = torch.cat([d3, e3_att], dim=1) # (B, 512, 60, 60)
-        d3 = self.dec3(d3)                  # (B, 256, 60, 60)
-        
-        if return_attention:
-            self.attention_maps['att3'] = att_map3
-        
-        if config.GRADCAM_LAYER == 'dec3' and d3.requires_grad:
-            d3.register_hook(self.save_gradient)
-            self.activations = d3
-        
-        # level 2
-        d2 = self.up2(d3)                   # (B, 128, 120, 120)
-        e2_att, att_map2 = self.att2(d2, e2)  
-        d2 = torch.cat([d2, e2_att], dim=1) # (B, 256, 120, 120)
-        d2 = self.dec2(d2)                  # (B, 128, 120, 120)
-        
-        if return_attention:
-            self.attention_maps['att2'] = att_map2
-        
-        if config.GRADCAM_LAYER == 'dec2' and d2.requires_grad:
-            d2.register_hook(self.save_gradient)
-            self.activations = d2
-        
-        # level 1
-        d1 = self.up1(d2)                   # (B, 64, 240, 240)
-        e1_att, att_map1 = self.att1(d1, e1)  
-        d1 = torch.cat([d1, e1_att], dim=1) # (B, 128, 240, 240)
-        d1 = self.dec1(d1)                  # (B, 64, 240, 240)
-        
-        if return_attention:
-            self.attention_maps['att1'] = att_map1
-        
-        if config.GRADCAM_LAYER == 'dec1' and d1.requires_grad:
-            d1.register_hook(self.save_gradient)
-            self.activations = d1
-        
-        # output 
-        out = self.out(d1)                  # (B, 1, 240, 240)
-        
-        if config.OUTPUT_ACTIVATION == 'sigmoid':
-            out = torch.sigmoid(out)
-        elif config.OUTPUT_ACTIVATION == 'softmax':
-            out = torch.softmax(out, dim=1)
-        
-        if return_attention:
-            return out, self.attention_maps
-        
-        return out
-    
-    def save_gradient(self, grad):
-        """hook to save gradients for Grad-CAM"""
-        self.gradients = grad
+        return total, {
+            'dice': dice.item(),
+            'bce': bce.item(),
+            'focal': focal.item(),
+            'total': total.item()
+        }
 
 
-# grad-cam
-class GradCAM:
+class TrainingHistory:
     """
-    grad-CAM 
-    visualizes which regions the model focuses on for predictions
+    Track and visualize training metrics over epochs.
+    
+    This class maintains a record of all training metrics and provides
+    visualization capabilities for monitoring training progress.
+    
+    Tracked Metrics:
+        - Training loss
+        - Validation loss
+        - Validation Dice score
+        - Validation F1 score
+        - Learning rate
+    
+    Attributes:
+        train_losses (list): Training loss per epoch
+        val_losses (list): Validation loss per epoch
+        val_dice_scores (list): Validation Dice scores per epoch
+        val_f1_scores (list): Validation F1 scores per epoch
+        learning_rates (list): Learning rate per epoch
+        epochs (list): Epoch numbers
     """
+
+    def __init__(self):
+        """Initialize empty tracking lists."""
+        self.train_losses = []
+        self.val_losses = []
+        self.val_dice_scores = []
+        self.val_f1_scores = []
+        self.learning_rates = []
+        self.epochs = []
+        
+    def update(self, epoch, train_loss, val_loss, val_dice, val_f1, lr):
+        """
+        Record metrics for a single epoch.
+        
+        Args:
+            epoch (int): Current epoch number
+            train_loss (float): Average training loss for the epoch
+            val_loss (float): Average validation loss for the epoch
+            val_dice (float): Validation Dice score
+            val_f1 (float): Validation F1 score
+            lr (float): Current learning rate
+        """
+        self.epochs.append(epoch)
+        self.train_losses.append(train_loss)
+        self.val_losses.append(val_loss)
+        self.val_dice_scores.append(val_dice)
+        self.val_f1_scores.append(val_f1)
+        self.learning_rates.append(lr)
     
-    def __init__(self, model):
-        self.model = model
-        self.model.eval()
-    
-    def generate_cam(self, input_image, target_layer='bottleneck'):
+    def plot(self, save_path):
         """
-        generate Grad-CAM heatmap
+        Generate and save a 2x2 grid of training curve plots.
         
-        args:
-            input_image: input tensor (1, 4, 240, 240)
-            target_layer: layer to visualize
-        returns:
-            cam: grad-CAM heatmap (240, 240)
+        Creates four subplots:
+            1. Training and Validation Loss
+            2. Validation Dice Score
+            3. Validation F1 Score
+            4. Learning Rate Schedule 
+        
+        Args:
+            save_path 
         """
-        # set target layer
-        global GRADCAM_LAYER
-        GRADCAM_LAYER = target_layer
+        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
         
-        # forward pass
-        self.model.train()  # gradient computation
-        output = self.model(input_image)
+        axes[0, 0].plot(self.epochs, self.train_losses, label='Train Loss', linewidth=2)
+        axes[0, 0].plot(self.epochs, self.val_losses, label='Val Loss', linewidth=2)
+        axes[0, 0].set_xlabel('Epoch', fontsize=12)
+        axes[0, 0].set_ylabel('Loss', fontsize=12)
+        axes[0, 0].set_title('Training and Validation Loss', fontsize=14, fontweight='bold')
+        axes[0, 0].legend()
+        axes[0, 0].grid(True, alpha=0.3)
         
-        # backward pass
-        self.model.zero_grad()
-        output.sum().backward()
+        axes[0, 1].plot(self.epochs, self.val_dice_scores, label='Dice Score', 
+                       linewidth=2, color='green')
+        axes[0, 1].set_xlabel('Epoch', fontsize=12)
+        axes[0, 1].set_ylabel('Dice Score', fontsize=12)
+        axes[0, 1].set_title('Validation Dice Score', fontsize=14, fontweight='bold')
+        axes[0, 1].legend()
+        axes[0, 1].grid(True, alpha=0.3)
+        axes[0, 1].set_ylim([0, 1])
         
-        # get gradients and activations
-        gradients = self.model.gradients
-        activations = self.model.activations
+        axes[1, 0].plot(self.epochs, self.val_f1_scores, label='F1 Score', 
+                       linewidth=2, color='orange')
+        axes[1, 0].set_xlabel('Epoch', fontsize=12)
+        axes[1, 0].set_ylabel('F1 Score', fontsize=12)
+        axes[1, 0].set_title('Validation F1 Score', fontsize=14, fontweight='bold')
+        axes[1, 0].legend()
+        axes[1, 0].grid(True, alpha=0.3)
+        axes[1, 0].set_ylim([0, 1])
         
-        if gradients is None or activations is None:
-            print(f"no gradients/activations captured for layer {target_layer}")
-            return np.zeros((240, 240))
-        
-        # calculate weights 
-        weights = torch.mean(gradients, dim=[2, 3], keepdim=True)
-        
-        # weighted combination of activation maps
-        cam = torch.sum(weights * activations, dim=1, keepdim=True)
-        
-        # apply ReLU 
-        cam = F.relu(cam)
-        
-        # normalize to [0, 1]
-        cam = cam - cam.min()
-        if cam.max() > 0:
-            cam = cam / cam.max()
-        
-        # resize to input size
-        cam = F.interpolate(cam, size=(240, 240), mode='bilinear', align_corners=False)
-        
-        # convert to numpy
-        cam = cam.squeeze().cpu().detach().numpy()
-        
-        self.model.eval()
-        return cam
-    
-    def visualize_cam(self, input_image, cam, ground_truth=None, prediction=None, save_path=None):
-        """
-        visualize Grad-CAM overlay on input image
-        
-        args:
-            input_image: input tensor (1, 4, 240, 240)
-            cam: grad-CAM heatmap (240, 240)
-            ground_truth: ground truth mask (optional)
-            prediction: model prediction (optional)
-            save_path: path to save figure
-        """
-        # use FLAIR channel for visualization
-        flair = input_image[0, 0].cpu().numpy()
-        
-        # normalize FLAIR to [0, 1] for display
-        flair = (flair - flair.min()) / (flair.max() - flair.min() + 1e-8)
-        
-        # create figure
-        n_cols = 2 + (ground_truth is not None) + (prediction is not None)
-        fig, axes = plt.subplots(1, n_cols, figsize=(5*n_cols, 5))
-        
-        col = 0
-        
-        # original image
-        axes[col].imshow(flair, cmap='gray')
-        axes[col].set_title('FLAIR Image')
-        axes[col].axis('off')
-        col += 1
-        
-        # grad-CAM overlay
-        axes[col].imshow(flair, cmap='gray')
-        axes[col].imshow(cam, cmap='jet', alpha=0.5)
-        axes[col].set_title(f'Grad-CAM ({config.GRADCAM_LAYER})')
-        axes[col].axis('off')
-        col += 1
-        
-        # ground truth
-        if ground_truth is not None:
-            gt = ground_truth[0, 0].cpu().numpy()
-            axes[col].imshow(flair, cmap='gray')
-            axes[col].imshow(gt, cmap='jet', alpha=0.5)
-            axes[col].set_title('Ground Truth')
-            axes[col].axis('off')
-            col += 1
-        
-        # prediction
-        if prediction is not None:
-            pred = prediction[0, 0].cpu().detach().numpy()
-            axes[col].imshow(flair, cmap='gray')
-            axes[col].imshow(pred, cmap='jet', alpha=0.5)
-            axes[col].set_title('Prediction')
-            axes[col].axis('off')
+        axes[1, 1].plot(self.epochs, self.learning_rates, label='Learning Rate', 
+                       linewidth=2, color='red')
+        axes[1, 1].set_xlabel('Epoch', fontsize=12)
+        axes[1, 1].set_ylabel('Learning Rate', fontsize=12)
+        axes[1, 1].set_title('Learning Rate Schedule', fontsize=14, fontweight='bold')
+        axes[1, 1].legend()
+        axes[1, 1].grid(True, alpha=0.3)
+        axes[1, 1].set_yscale('log')
         
         plt.tight_layout()
-        
-        if save_path:
-            plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        
-        plt.show()
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
         plt.close()
 
 
-# utilities 
-def count_parameters(model):
-    """count trainable parameters in model"""
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-
-def test_model(model, input_shape=(1, 4, 240, 240)):
+def setup_training():
     """
-    test model with dummy input to verify architecture
+    Initialize the training environment and create necessary directories.
     
-    args:
-        model: pyTorch model
-        input_shape: input tensor shape (batch, channels, height, width)
+    This function performs the following setup tasks:
+        1. Sets random seeds for reproducibility
+        2. Configures PyTorch backend for deterministic behavior
+        3. Creates directory structure for saving outputs
+    
+    Returns:
+        tuple: (checkpoint_dir, results_dir, plots_dir)
     """
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = model.to(device)
+
+    torch.manual_seed(config.RANDOM_SEED)
+    np.random.seed(config.RANDOM_SEED)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(config.RANDOM_SEED)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
     
-    # create dummy input
-    x = torch.randn(input_shape).to(device)
+    checkpoint_dir = Path("checkpoints")
+    results_dir = Path("results")
+    plots_dir = Path("plots")
     
-    # forward pass
-    print(f"\ntesting model with input shape: {input_shape}")
-    print(f"device: {device}")
+    for d in [checkpoint_dir, results_dir, plots_dir]:
+        d.mkdir(exist_ok=True)
     
-    with torch.no_grad():
-        output = model(x, return_attention=False)
-    
-    print(f"output shape: {output.shape}")
-    print(f"output range: [{output.min():.3f}, {output.max():.3f}]")
-    print(f"total parameters: {count_parameters(model):,}")
-    
-    # calculate model size
-    param_size = sum(p.nelement() * p.element_size() for p in model.parameters())
-    buffer_size = sum(b.nelement() * b.element_size() for b in model.buffers())
-    size_mb = (param_size + buffer_size) / (1024**2)
-    print(f"model size: {size_mb:.2f} MB")
-    
-    return output
+    return checkpoint_dir, results_dir, plots_dir
 
 
-# main
-if __name__ == "__main__":
-    print("model verification")
+class MixedPrecisionTrainer:
+    """
+    Handle mixed precision training for improved performance and memory efficiency.
+    
+    Mixed precision training uses float16 (half precision) for most operations
+    while maintaining float32 precision for critical calculations.
+    
+    The trainer automatically handles:
+        - Gradient scaling to prevent underflow
+        - Loss scaling for stable training
+        - Gradient clipping for training stability
+    
+    Attributes:
+        device (torch.device): Device for training (CPU or CUDA)
+        scaler (GradScaler or None): Gradient scaler for mixed precision (CUDA only)
+    """
+
+    def __init__(self, device):
+        """
+        Initialize the mixed precision trainer.
         
-    # test model
-    print("\nmodel architecture test")
-    model = AttentionUNet(in_channels=4, num_classes=1)
-    test_model(model)
+        Args:
+            device (torch.device): Device for training (CPU or CUDA)
+        """
+
+        self.device = device
+        self.scaler = torch.cuda.amp.GradScaler() if device.type == 'cuda' else None
     
-    # test Grad-CAM
-    print("grad-cam test")
+    def train_step(self, model, images, masks, criterion, optimizer):
+        """
+        Execute a single training step with mixed precision.
+        
+        This method performs:
+            1. Forward pass (with autocast if CUDA)
+            2. Loss calculation
+            3. Backward pass with gradient scaling
+            4. Gradient clipping 
+            5. Optimizer step
+        
+        Args:
+            model (nn.Module): Neural network model
+            images (torch.Tensor): Input images [B, C, H, W]
+            masks (torch.Tensor): Ground truth masks [B, 1, H, W]
+            criterion (nn.Module): Loss function
+            optimizer (torch.optim.Optimizer): Optimizer
+        
+        Returns:
+            tuple: (loss, components, outputs)
+        
+        Training Flow (CUDA):
+            with autocast:
+                outputs = model(images)        
+                loss = criterion(outputs, masks)
+            
+            scaler.scale(loss).backward()     
+            scaler.unscale_(optimizer)         
+            clip_grad_norm_(...)              
+            scaler.step(optimizer)            
+            scaler.update()                   
+        """
+
+        if self.scaler:
+            with torch.cuda.amp.autocast():
+                outputs = model(images)
+                loss, components = criterion(outputs, masks)
+            
+            optimizer.zero_grad()
+            self.scaler.scale(loss).backward()
+            self.scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            self.scaler.step(optimizer)
+            self.scaler.update()
+        else:
+            outputs = model(images)
+            loss, components = criterion(outputs, masks)
+            optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
+        
+        return loss, components, outputs
+
+
+def train_epoch(model, loader, criterion, optimizer, device, trainer):
+    """
+    Train the model for one complete epoch.
     
+    Iterates through all batches in the training set, performing forward and
+    backward passes for each batch. Returns average metrics over the epoch.
+    
+    Args:
+        model (nn.Module): Neural network model to train
+        loader (DataLoader): Training data loader
+        criterion (nn.Module): Loss function
+        optimizer (torch.optim.Optimizer): Optimizer for weight updates
+        device (torch.device): Device for computation (CPU or CUDA)
+        trainer (MixedPrecisionTrainer): Mixed precision training handler
+    
+    Returns:
+        tuple: (avg_loss, avg_dice)
+            - avg_loss (float): Average training loss over the epoch
+            - avg_dice (float): Average Dice loss component over the epoch
+    """
+
+    model.train()
+    total_loss = 0
+    total_dice = 0
+    samples = 0
+    
+    for batch_idx, (images, masks) in enumerate(loader):
+        images = images.to(device, non_blocking=True)
+        masks = masks.to(device, non_blocking=True)
+        loss, components, outputs = trainer.train_step(model, images, masks, criterion, optimizer)
+        
+        batch_size = images.size(0)
+        total_loss += loss.item() * batch_size
+        total_dice += components['dice'] * batch_size
+        samples += batch_size
+    
+    avg_loss = total_loss / samples if samples > 0 else 0
+    avg_dice = total_dice / samples if samples > 0 else 0
+    
+    return avg_loss, avg_dice
+
+
+@torch.no_grad()
+def validate_epoch(model, loader, criterion, device):
+    """
+    Validate the model on a validation or test set.
+    
+    Performs inference on all batches without gradient computation and calculates
+    comprehensive evaluation metrics including standard segmentation metrics and
+    specialized small tumor detection metrics.
+    
+    Args:
+        model (nn.Module): Neural network model to evaluate
+        loader (DataLoader): Validation/test data loader
+        criterion (nn.Module): Loss function
+        device (torch.device): Device for computation
+    
+    Returns:
+        tuple: (avg_loss, dice, metrics)
+            - avg_loss (float): Average validation loss
+            - dice (float): Overall Dice coefficient
+            - metrics (dict): Comprehensive evaluation metrics
+    
+    Small Tumor Tracking:
+        Tumors with ground truth size in (0, 500) pixels are tracked separately
+        to evaluate model performance on small lesions, which are clinically
+        important but harder to detect.
+    """
+
+    model.eval()
+    total_loss = 0
+    samples = 0
+    
+    total_tp = 0
+    total_fp = 0
+    total_fn = 0
+    total_tn = 0
+    
+    small_tumor_tp = 0
+    small_tumor_fp = 0
+    small_tumor_fn = 0
+    small_tumor_count = 0
+    small_tumor_total_size = 0
+    
+    for images, masks in loader:
+        images = images.to(device, non_blocking=True)
+        masks = masks.to(device, non_blocking=True)
+        
+        outputs = model(images)
+        loss, components = criterion(outputs, masks)
+        
+        batch_size = images.size(0)
+        total_loss += loss.item() * batch_size
+        samples += batch_size
+        
+        pred_sigmoid = torch.sigmoid(outputs)
+        pred_binary = (pred_sigmoid > 0.5).float()
+        
+        total_tp += (pred_binary * masks).sum().item()
+        total_fp += (pred_binary * (1 - masks)).sum().item()
+        total_fn += ((1 - pred_binary) * masks).sum().item()
+        total_tn += ((1 - pred_binary) * (1 - masks)).sum().item()
+        
+        for i in range(batch_size):
+            tumor_size = masks[i].sum().item()
+            if 0 < tumor_size < 500:
+                pred_i = pred_binary[i]
+                mask_i = masks[i]
+                
+                small_tumor_tp += (pred_i * mask_i).sum().item()
+                small_tumor_fp += (pred_i * (1 - mask_i)).sum().item()
+                small_tumor_fn += ((1 - pred_i) * mask_i).sum().item()
+                small_tumor_count += 1
+                small_tumor_total_size += tumor_size
+    
+    avg_loss = total_loss / samples if samples > 0 else 0
+    
+    eps = 1e-7
+    precision = total_tp / (total_tp + total_fp + eps)
+    recall = total_tp / (total_tp + total_fn + eps)
+    f1 = 2 * precision * recall / (precision + recall + eps)
+    dice = 2 * total_tp / (2 * total_tp + total_fp + total_fn + eps)
+    accuracy = (total_tp + total_tn) / (total_tp + total_tn + total_fp + total_fn + eps)
+    iou = total_tp / (total_tp + total_fp + total_fn + eps)
+    
+    metrics = {
+        'precision': precision,
+        'recall': recall,
+        'f1': f1,
+        'accuracy': accuracy,
+        'dice': dice,
+        'iou': iou,
+        'tp': total_tp,
+        'fp': total_fp,
+        'tn': total_tn,
+        'fn': total_fn
+    }
+    
+    if small_tumor_count > 0:
+        small_tumor_dice = 2 * small_tumor_tp / (2 * small_tumor_tp + small_tumor_fp + small_tumor_fn + eps)
+        metrics['small_tumor_dice'] = small_tumor_dice
+        metrics['small_tumor_count'] = small_tumor_count
+        metrics['avg_small_tumor_size'] = small_tumor_total_size / small_tumor_count
+    
+    return avg_loss, dice, metrics
+
+
+def main():
+    """
+    Main training pipeline for medical image segmentation.
+    
+    Training Pipeline:
+        1. Environment setup and directory creation
+        2. Data loader initialization with augmentation
+        3. Model, loss function, and optimizer instantiation
+        4. Training loop with validation after each epoch
+        5. Best model checkpointing based on validation Dice score
+        6. Periodic checkpointing every 10 epochs
+        7. Early stopping if validation doesn't improve
+        8. Final evaluation on held-out test set
+        9. Results saving (JSON) and training curve visualization (PNG)
+    
+    Training Features:
+        - Mixed precision training for CUDA devices (~2x speedup)
+        - AdamW optimizer with weight decay regularization
+        - ReduceLROnPlateau scheduler (halves LR after 5 epochs without improvement)
+        - Early stopping with 20-epoch patience
+        - Gradient clipping (max_norm=1.0) for training stability
+        - Comprehensive metrics tracking (Dice, F1, IoU, etc.)
+        - Special tracking for small tumors (< 500 pixels)
+    
+    Hyperparameters:
+        Architecture (from config):
+            - INPUT_CHANNELS: Number of input image channels 
+            - NUM_CLASSES: Output classes (1 for binary segmentation)
+            - BASE_FILTERS: Base number of filters in U-Net
+            - DROPOUT_RATE: Dropout probability for regularization
+        
+        Training (from config):
+            - BATCH_SIZE: Samples per training batch
+            - DICE_WEIGHT: Weight for Dice loss component (default: 0.5)
+            - BCE_WEIGHT: Weight for binary cross-entropy (default: 0.3)
+            - FOCAL_WEIGHT: Weight for focal loss component (default: 0.2)
+            - POS_WEIGHT: Positive class weight for handling imbalance
+            - RANDOM_SEED: For reproducibility
+        
+        Optimization:
+            - Learning rate: 1e-4 (initial)
+            - Weight decay: 1e-5 (L2 regularization)
+            - Betas: (0.9, 0.999) for AdamW momentum
+            - LR scheduler: ReduceLROnPlateau(factor=0.5, patience=5, min_lr=1e-6)
+            - Max epochs: 100
+            - Early stopping patience: 20 epochs
+    
+    Early Stopping:
+        Training stops if validation Dice score doesn't improve for 20 consecutive
+        epochs. The best model (highest validation Dice) is automatically saved
+        and used for final test evaluation.
+    
+    Device Selection:
+        Automatically uses CUDA if available, otherwise falls back to CPU.
+        Mixed precision training is enabled only for CUDA devices.
+
+    Raises:
+        Exception: Any errors during training are caught by the __main__ block
+                  and printed with full traceback for debugging
+    
+    Example Usage:
+        >>> # Run training from command line
+        >>> python train.py
+        
+        >>> # Or import and run programmatically
+        >>> if __name__ == "__main__":
+        >>>     main()
+    """
+
+    # Record start time for total training duration
+    start_time = time.time()
+    
+    # Create output directories and set random seeds for reproducibility
+    checkpoint_dir, results_dir, plots_dir = setup_training()
+    
+    # Select compute device (CUDA GPU if available, otherwise CPU)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    # DATA LOADING
+    # Create data loaders for train/validation/test sets
+    # use_augmentation=True enables random flips, rotations, etc. for training
+    train_loader, val_loader, test_loader = create_dataloaders(
+        config, use_augmentation=True
+    )
+    
+    # MODEL INITIALIZATION
+
+    # Initialize Attention U-Net architecture
+    model = AttentionUNet(
+        in_channels=config.INPUT_CHANNELS,    
+        num_classes=config.NUM_CLASSES,        
+        base_filters=config.BASE_FILTERS       
+    )
     model = model.to(device)
     
-    # create dummy input
-    dummy_input = torch.randn(1, 4, 240, 240).to(device)
-    dummy_gt = torch.randint(0, 2, (1, 1, 240, 240)).float().to(device)
+    # Count total trainable parameters for reporting
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     
-    # generate Grad-CAM
-    gradcam = GradCAM(model)
-    cam = gradcam.generate_cam(dummy_input, target_layer='bottleneck')
+    # LOSS FUNCTION INITIALIZATION
+
+    # Initialize combined loss function with three components:
+    # 1. Dice loss (overlap-based, handles class imbalance)
+    # 2. BCE loss (pixel-wise binary cross-entropy)
+    # 3. Focal loss (focuses on hard examples)
+    # small_tumor_weight=1.5 gives extra emphasis to small lesions
+    criterion = EnhancedCombinedLoss(
+        dice_weight=config.DICE_WEIGHT,        # Weight for Dice component
+        bce_weight=config.BCE_WEIGHT,          # Weight for BCE component
+        focal_weight=config.FOCAL_WEIGHT,      # Weight for Focal component
+        small_tumor_weight=1.5,                # Extra weight for small tumors
+        pos_weight=config.POS_WEIGHT           # Positive class weight in BCE
+    )
+    criterion = criterion.to(device)
+
+    # OPTIMIZER AND SCHEDULER INITIALIZATION
     
-    print(f"\ngrad-CAM generated successfully")
-    print(f"  CAM shape: {cam.shape}")
-    print(f"  CAM range: [{cam.min():.3f}, {cam.max():.3f}]")
+    # AdamW optimizer with weight decay for regularization
+    optimizer = optim.AdamW(
+        model.parameters(),
+        lr=1e-4,              # Initial learning rate
+        weight_decay=1e-5,    # L2 regularization strength
+        betas=(0.9, 0.999)    # Momentum parameters
+    )
     
-    # visualize
-    with torch.no_grad():
-        pred = model(dummy_input)
+    # Learning rate scheduler: reduces LR when validation loss plateaus
+    # Halves the learning rate if no improvement for 5 epochs
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        mode='min',      # Minimize validation loss
+        factor=0.5,      # Multiply LR by 0.5 when triggered
+        patience=5,      # Wait 5 epochs before reducing
+        min_lr=1e-6      # Don't reduce below this value
+    )
     
-    save_path = config.GRADCAM_SAVE_PATH / "test_gradcam.png"
-    gradcam.visualize_cam(dummy_input, cam, ground_truth=dummy_gt, prediction=pred, save_path=save_path)
-    print(f"\ngrad-CAM visualization saved to: {save_path}")
+    # TRAINING UTILITIES INITIALIZATION
+    #     
+    # Mixed precision trainer for faster training on CUDA
+    trainer = MixedPrecisionTrainer(device)
     
-    print("model verification complete")
-    print("\nmodel ready for training!")
-    print("grad-CAM visualization working!")
+    # History tracker for metrics and visualization
+    history = TrainingHistory()
+    
+    # TRAINING CONFIGURATION
+    
+    num_epochs = 100                    # Maximum training epochs
+    best_val_loss = float('inf')        # Track best validation loss
+    best_dice = 0                       # Track best validation Dice score
+    patience_counter = 0                # Count epochs without improvement
+    patience_limit = 20                 # Stop if no improvement for this many epochs
+    
+    # MAIN TRAINING LOOP
+    
+    for epoch in range(num_epochs):
+        epoch_start = time.time()
+        
+        # Train for one epoch
+        train_loss, train_dice = train_epoch(
+            model, train_loader, criterion, optimizer, device, trainer
+        )
+        
+        # Validate on validation set
+        val_loss, val_dice, val_metrics = validate_epoch(
+            model, val_loader, criterion, device
+        )
+        
+        # Update learning rate based on validation loss
+        scheduler.step(val_loss)
+        current_lr = optimizer.param_groups[0]['lr']
+        
+        # Record metrics in history for later plotting
+        history.update(
+            epoch, train_loss, val_loss, val_dice, val_metrics['f1'], current_lr
+        )
+        
+        # MODEL CHECKPOINTING
+        
+        # Check if this is the best model so far (based on validation Dice)
+        is_best = val_dice > best_dice
+        
+        if is_best:
+            # Update best scores and reset patience counter
+            best_dice = val_dice
+            best_val_loss = val_loss
+            patience_counter = 0
+            
+            # Save best model checkpoint with full state
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
+                'val_dice': val_dice,
+                'val_loss': val_loss,
+                'val_metrics': val_metrics,
+                'config': {
+                    'INPUT_CHANNELS': config.INPUT_CHANNELS,
+                    'NUM_CLASSES': config.NUM_CLASSES,
+                    'BASE_FILTERS': config.BASE_FILTERS
+                }
+            }, checkpoint_dir / "best_model.pth")
+        else:
+            # Increment patience counter if no improvement
+            patience_counter += 1
+        
+        # PROGRESS LOGGING
+        
+        # Calculate time taken for this epoch
+        epoch_time = time.time() - epoch_start
+        
+        # Format small tumor metrics if available
+        small_tumor_info = ""
+        if 'small_tumor_dice' in val_metrics:
+            small_tumor_info = (
+                f" | Small Dice: {val_metrics['small_tumor_dice']:.4f} "
+                f"(n={val_metrics['small_tumor_count']})"
+            )
+        
+        # Print epoch summary with BEST marker if this is the best model
+        status = "BEST" if is_best else "    "
+        print(f"{status} Epoch {epoch:03d}/{num_epochs} | "
+              f"Train Loss: {train_loss:.4f} | "
+              f"Val Loss: {val_loss:.4f} | "
+              f"Dice: {val_dice:.4f} | "
+              f"F1: {val_metrics['f1']:.4f}"
+              f"{small_tumor_info} | "
+              f"Time: {epoch_time:.1f}s | "
+              f"LR: {current_lr:.2e}")
+        
+        # PERIODIC CHECKPOINTING AND PLOTTING
+        
+        # Every 10 epochs (after epoch 0), save checkpoint and plot curves
+        if epoch % 10 == 0 and epoch > 0:
+            # Save periodic checkpoint
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'train_loss': train_loss,
+                'val_loss': val_loss,
+                'val_dice': val_dice
+            }, checkpoint_dir / f"checkpoint_epoch_{epoch:03d}.pth")
+            
+            # Generate and save training curves plot
+            history.plot(plots_dir / f"training_curves_epoch_{epoch:03d}.png")
+        
+        # EARLY STOPPING CHECK
+        
+        # Stop training if no improvement for patience_limit epochs
+        if patience_counter >= patience_limit:
+            break
+    
+    # FINAL PLOTTING
+    
+    # Save final training curves after training completes
+    history.plot(plots_dir / "training_curves_final.png")
+    
+    # Calculate total training time
+    total_time = time.time() - start_time
+    
+    # TEST SET EVALUATION
+    
+    # Load the best model for final evaluation
+    best_checkpoint = torch.load(
+        checkpoint_dir / "best_model.pth", map_location=device
+    )
+    model.load_state_dict(best_checkpoint['model_state_dict'])
+    
+    # Evaluate on held-out test set
+    test_loss, test_dice, test_metrics = validate_epoch(
+        model, test_loader, criterion, device
+    )
+    
+    # RESULTS PRINTING
+    
+    # Print formatted test results table
+    print(f"\n{'Metric':<20} {'Score':>10}")
+    print(f"{'Loss':<20} {test_loss:>10.4f}")
+    print(f"{'Dice Score':<20} {test_dice:>10.4f}")
+    print(f"{'F1 Score':<20} {test_metrics['f1']:>10.4f}")
+    print(f"{'IoU':<20} {test_metrics['iou']:>10.4f}")
+    print(f"{'Precision':<20} {test_metrics['precision']:>10.4f}")
+    print(f"{'Recall':<20} {test_metrics['recall']:>10.4f}")
+    print(f"{'Accuracy':<20} {test_metrics['accuracy']:>10.4f}")
+    
+    # Print small tumor metrics if available
+    if 'small_tumor_dice' in test_metrics:
+        print("-" * 32)
+        print(f"{'Small Tumor Dice':<20} {test_metrics['small_tumor_dice']:>10.4f}")
+        print(f"{'Small Tumor Count':<20} {test_metrics['small_tumor_count']:>10}")
+        print(f"{'Avg Small Size (px)':<20} {test_metrics['avg_small_tumor_size']:>10.1f}")
+    
+    # RESULTS SAVING
+    
+    # Compile comprehensive results dictionary
+    results = {
+        'test_loss': float(test_loss),
+        'test_dice': float(test_dice),
+        'test_metrics': {
+            k: float(v) if isinstance(v, (int, float, np.number)) else v 
+            for k, v in test_metrics.items()
+        },
+        'best_val_dice': float(best_dice),
+        'total_epochs': epoch + 1,
+        'training_time_minutes': total_time / 60,
+        'model_parameters': total_params,
+        'training_config': {
+            'batch_size': config.BATCH_SIZE,
+            'base_filters': config.BASE_FILTERS,
+            'dropout_rate': config.DROPOUT_RATE,
+            'random_seed': config.RANDOM_SEED
+        }
+    }
+    
+    # Save results to JSON file for reproducibility and record-keeping
+    results_path = results_dir / "final_results.json"
+    with open(results_path, 'w') as f:
+        json.dump(results, f, indent=2)
+
+
+if __name__ == "__main__":
+    try:
+        # Run main training pipeline
+        main()
+    except KeyboardInterrupt:
+        # Handle Ctrl+C gracefully
+        print("\nInterrupted")
+    except Exception as e:
+        # Catch and print any errors with full traceback for debugging
+        print(f"\nError: {e}")
+        import traceback
+        traceback.print_exc()
