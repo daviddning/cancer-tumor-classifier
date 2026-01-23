@@ -217,7 +217,7 @@ This project is open source and available under the [MIT License](LICENSE).
 
 ## 📧 Contact
 
-**David Ding**  
+**David Ning**  
 [GitHub](https://github.com/daviddning) • [LinkedIn](https://www.linkedin.com/in/daviddning)
 
 For questions about this project or collaboration opportunities, please open an issue or reach out directly.
