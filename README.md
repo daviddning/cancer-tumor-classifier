@@ -9,11 +9,14 @@
 
 **An end-to-end deep learning pipeline for automated brain tumor segmentation from multi-modal MRI scans**
 
-[Features](#-features) • [Results](#-results) • [Dataset](#-dataset) • [Demo](#-demo) • [Architecture](#-architecture)
+[Features](#-features) • [Results](#-results) • [Dataset](#-dataset) • [Demo](#-demo) • [Architecture](#architecture)
+
+
+
+![image](https://imgs.search.brave.com/rw3nEnp_f7jmZs3h60r1qSKXP_lmMHuql3PqRu4M9K8/rs:fit:860:0:0:0/g:ce/aHR0cHM6Ly9tZWRp/YS5nZXR0eWltYWdl/cy5jb20vaWQvMTQ0/MDUyNTQzOC9waG90/by9jbG9zZS11cC1v/Zi13b21hbi1kb2N0/b3ItbG9va2luZy1h/dC1jdC1zY2FuLXJl/cG9ydC1vbi1jb21w/dXRlci1tb25pdG9y/LmpwZz9zPTYxMng2/MTImdz0wJms9MjAm/Yz1BMmd4bjVadVA3/WFZEaF9aNk03dEJZ/TTI1NmNaaC1aTUVZ/UDN5THhpRWFJPQ)
 
 </div>
 
----
 ## 🧠 Overview
 
 Hi! I'm a second-year Data Science student at UBC, and this is my deep learning project for automated brain tumor segmentation from MRI scans.
