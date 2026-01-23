@@ -110,19 +110,12 @@ class BCELoss(nn.Module):
         self.pos_weight = pos_weight
     
     def forward(self, pred, target):
-        """
-        args:
-            pred: predicted mask (B, 1, H, W) with values in [0, 1]
-            target: ground truth mask (B, 1, H, W) with values in {0, 1}
-        returns:
-            bce loss value
-        """
         if self.pos_weight is not None:
-            # apply positive weight for class imbalance
-            return F.binary_cross_entropy(pred, target, reduction='mean')
+            return F.binary_cross_entropy(pred, target, 
+                                        weight=torch.tensor([self.pos_weight]).to(pred.device),
+                                        reduction='mean')
         else:
             return F.binary_cross_entropy(pred, target, reduction='mean')
-
 
 # COMBINED LOSS
 class CombinedLoss(nn.Module):

@@ -12,13 +12,13 @@ TEST_RATIO = 0.15
 RANDOM_SEED = 88
     
 # model parameters
-INPUT_CHANNELS = 4  # FLAIR, T1, T1ce, T2
+INPUT_CHANNELS = 4  
 IMAGE_SIZE = 240
 NUM_CLASSES = 1  
     
 # training parameters
-BATCH_SIZE = 16
-NUM_WORKERS = 4
+BATCH_SIZE = 4
+NUM_WORKERS = 6
     
 # augmentation parameters
 HORIZONTAL_FLIP_PROB = 0.5
@@ -29,7 +29,7 @@ GAUSSIAN_NOISE_PROB = 0.2
 # normalization strategy
 NORMALIZATION = "z_score"
 
-BASE_FILTERS = 64           
+BASE_FILTERS = 32          
 DROPOUT_RATE = 0.2          
 USE_BATCH_NORM = True      
 ACTIVATION = 'relu'         
@@ -40,13 +40,7 @@ ATTENTION_REDUCTION = 2
 # output hyperparameters
 OUTPUT_ACTIVATION = 'sigmoid'  
 
-# grad-CAM hyperparameters
-GRADCAM_LAYER = 'bottleneck'  
-GRADCAM_SAVE_PATH = Path.cwd() / "graphics" / "gradcam"
-GRADCAM_SAVE_PATH.mkdir(parents=True, exist_ok=True)
-
 # loss hyperparameters
-
 # dice loss
 DICE_SMOOTH = 1.0
 

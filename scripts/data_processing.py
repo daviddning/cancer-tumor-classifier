@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import h5py
+import time
 import torch
 from torch.utils.data import Dataset, DataLoader
 from pathlib import Path
@@ -90,15 +91,22 @@ def create_patient_wise_split(metadata_df, config):
     
     return train_df, val_df, test_df
 
-# file path utilities
+
 def get_file_paths_from_metadata(metadata_df, data_path):
     """
     convert metadata entries to actual .h5 file paths.
     handles different possible path structures.
     """
+    # build index of all .h5 files first (one-time cost)
+    print("Building file index...", end=" ", flush=True)
+    index_start = time.time()
+    all_files = {f.name: str(f) for f in data_path.rglob("*.h5")}
+    index_time = time.time() - index_start
+    print(f"done ({index_time:.1f}s) - indexed {len(all_files):,} files")
+    
     file_paths = []
     missing_files = []
-        
+    
     for idx, row in tqdm(metadata_df.iterrows(), total=len(metadata_df), desc="Finding files"):
         # try to get path from metadata
         if 'slice_path' in row and pd.notna(row['slice_path']):
@@ -109,11 +117,9 @@ def get_file_paths_from_metadata(metadata_df, data_path):
             slice_num = row['slice']
             slice_name = f"volume_{volume_id}_slice_{slice_num}.h5"
         
-        # search for the file
-        h5_files = list(data_path.rglob(slice_name))
-        
-        if h5_files:
-            file_paths.append(str(h5_files[0]))
+        # lookup in index 
+        if slice_name in all_files:
+            file_paths.append(all_files[slice_name])
         else:
             missing_files.append(slice_name)
             file_paths.append(None)
@@ -163,12 +169,15 @@ class BraTSDataset(Dataset):
             # load .h5 file
             with h5py.File(self.file_paths[idx], 'r') as f:
                 image = f['image'][:]  # shape: (240, 240, 4)
-                mask = f['mask'][:]    # shape: (240, 240)
+                mask = f['mask'][:]    # shape: (240, 240) or (240, 240, 3)
             
             # normalize image
             image = self.normalize_image(image)
             
-            # convert mask to binary 
+            # convert mask to binary
+            if mask.ndim == 3:  
+                mask = mask[:, :, 0]  
+            
             mask = (mask > 0).astype(np.float32)
             
             # apply augmentations 
@@ -178,9 +187,8 @@ class BraTSDataset(Dataset):
                 mask = transformed['mask']
             
             # convert to PyTorch tensors
-            # image: (4, 240, 240), Mask: (1, 240, 240)
             image = torch.from_numpy(image.transpose(2, 0, 1)).float()
-            mask = torch.from_numpy(mask).unsqueeze(0).float()
+            mask = torch.from_numpy(mask).unsqueeze(0).float() 
             
             return image, mask
         
@@ -224,7 +232,6 @@ class BraTSDataset(Dataset):
         
         elif self.normalization == "per_patient":
             # normalize using patient-level statistics
-            # (this would require pre-computed stats, simplified here)
             for i in range(4):
                 channel = image[:, :, i].astype(np.float32)
                 normalized[:, :, i] = (channel - channel.mean()) / (channel.std() + 1e-8)
@@ -298,7 +305,7 @@ def create_dataloaders(config, use_augmentation=True):
     metadata_df = pd.read_csv(config.METADATA_PATH)
     print(f"loaded {len(metadata_df):,} total slices")
     
-    # Cceate patient-wise split
+    # create patient-wise split
     train_df, val_df, test_df = create_patient_wise_split(metadata_df, config)
     
     # get file paths for each split
@@ -410,14 +417,14 @@ def verify_dataloader(dataloader, name="DataLoader"):
         
         # check for NaN or Inf
         if torch.isnan(images).any():
-            print("  ⚠ WARNING: NaN values detected in images!")
+            print("NaN values detected in images!")
         if torch.isinf(images).any():
-            print("  ⚠ WARNING: Inf values detected in images!")
+            print("Inf values detected in images!")
         
         return True
     
     except Exception as e:
-        print(f"\nError loading batch: {e}")
+        print(f"\nerror loading batch: {e}")
         return False
 
 
