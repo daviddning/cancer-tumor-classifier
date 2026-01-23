@@ -9,7 +9,7 @@
 
 **An end-to-end deep learning pipeline for automated brain tumor segmentation from multi-modal MRI scans**
 
-[Features](#-features) • [Results](#-results) • [Dataset](#-dataset) • [Demo](#-demo) • [Architecture](#architecture)
+[Features](#-features) • [Results](#-results) • [Dataset](#-dataset) • [Demo](#-demo) • [Architecture](#%EF%B8%8F-architecture)
 
 
 
