@@ -1,4 +1,4 @@
-# Brain Tumor Segmentation — Deep Learning for Medical Imaging
+# MedVision — Deep Learning for Medical Imaging
 
 <div align="center">
 
